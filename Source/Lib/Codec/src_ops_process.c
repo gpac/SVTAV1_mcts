@@ -445,7 +445,7 @@ static void svt_tpl_init_mv_cost_params(svt_mv_cost_param* mv_cost_params, const
 
 // Initialize xd fields required by TPL dispenser
 static void init_xd_tpl(MacroBlockD* xd, const Av1Common* const cm, const BlockSize block_size,
-                        const uint32_t mb_origin_x, const uint32_t mb_origin_y) {
+                        const uint32_t mb_origin_x, const uint32_t mb_origin_y, bool tile_mcts) {
     const int32_t bw      = mi_size_wide[block_size];
     const int32_t bh      = mi_size_high[block_size];
     const int     mi_row  = mb_origin_y >> MI_SIZE_LOG2;
@@ -456,6 +456,26 @@ static void init_xd_tpl(MacroBlockD* xd, const Av1Common* const cm, const BlockS
     xd->mb_to_right_edge  = ((cm->mi_cols - bw - mi_col) * MI_SIZE) * 8;
     xd->mi_row            = -xd->mb_to_top_edge / (8 * MI_SIZE);
     xd->mi_col            = -xd->mb_to_left_edge / (8 * MI_SIZE);
+    if (tile_mcts) {
+        int tile_row;
+        int tile_col;
+        for (tile_row = 0; tile_row < cm->tiles_info.tile_rows; ++tile_row) {
+            if (mi_row >= cm->tiles_info.tile_row_start_mi[tile_row] &&
+                mi_row < cm->tiles_info.tile_row_start_mi[tile_row + 1]) {
+                break;
+            }
+        }
+        for (tile_col = 0; tile_col < cm->tiles_info.tile_cols; ++tile_col) {
+            if (mi_col >= cm->tiles_info.tile_col_start_mi[tile_col] &&
+                mi_col < cm->tiles_info.tile_col_start_mi[tile_col + 1]) {
+                break;
+            }
+        }
+        assert(tile_row < cm->tiles_info.tile_rows && tile_col < cm->tiles_info.tile_cols);
+        TilesInfo tiles_info = cm->tiles_info;
+        svt_av1_tile_set_row(&xd->tile, &tiles_info, cm->mi_rows, tile_row);
+        svt_av1_tile_set_col(&xd->tile, &cm->tiles_info, cm->mi_cols, tile_col);
+    }
 }
 
 #if CONFIG_ENABLE_TPL_HQ
@@ -477,7 +497,7 @@ static void tpl_subpel_search(SequenceControlSet* scs, PictureParentControlSet* 
     SUBPEL_MOTION_SEARCH_PARAMS* ms_params = &ms_params_struct;
 
     ms_params->allow_hp       = 0; // Allow MAX QUARTER_PEL because pcs->frm_hdr.allow_high_precision_mv is not set yet
-    ms_params->forced_stop    = pcs->tpl_ctrls.subpel_depth;
+    ms_params->forced_stop    = scs->static_config.tile_mcts ? FULL_PEL : pcs->tpl_ctrls.subpel_depth;
     ms_params->iters_per_step = 2; // Maximum number of steps in logarithmic subpel search before giving up. [1, 2]
 
     // Set up limit values for MV components.
@@ -489,6 +509,16 @@ static void tpl_subpel_search(SequenceControlSet* scs, PictureParentControlSet* 
     mv_limits.col_min  = -(((xd->mi_col + mi_width) * MI_SIZE) + AOM_INTERP_EXTEND);
     mv_limits.row_max  = (cm->mi_rows - xd->mi_row) * MI_SIZE + AOM_INTERP_EXTEND;
     mv_limits.col_max  = (cm->mi_cols - xd->mi_col) * MI_SIZE + AOM_INTERP_EXTEND;
+    if (scs->static_config.tile_mcts) {
+        svt_av1_constrain_mv_limits_to_tile(&mv_limits,
+                                            &xd->tile,
+                                            xd->mi_row,
+                                            xd->mi_col,
+                                            mi_width * MI_SIZE,
+                                            mi_height * MI_SIZE,
+                                            scs->static_config.source_width,
+                                            scs->static_config.source_height);
+    }
     svt_av1_set_mv_search_range(&mv_limits, ref_mv);
     svt_av1_set_subpel_mv_search_range(&ms_params->mv_limits, (FullMvLimits*)&mv_limits, ref_mv);
 
@@ -620,7 +650,7 @@ static void tpl_mc_flow_dispenser_sb_generic(EncodeContext* enc_ctx, SequenceCon
         }
 
         MacroBlockD xd;
-        init_xd_tpl(&xd, pcs->av1_cm, block_size, mb_origin_x, mb_origin_y);
+        init_xd_tpl(&xd, pcs->av1_cm, block_size, mb_origin_x, mb_origin_y, scs->static_config.tile_mcts);
 
         const int dst_buffer_stride = recon_pic->y_stride;
         const int dst_mb_offset     = mb_origin_y * dst_buffer_stride + mb_origin_x;

@@ -200,6 +200,9 @@ void RefDecoder::parse_frame_info() {
 
     // save to frame_type_list
     stream_info_.frame_type_list.push_back(inspect_data->frame_type);
+    stream_info_.base_qindex_list.push_back(inspect_data->base_qindex);
+    stream_info_.delta_q_present_list.push_back(inspect_data->delta_q_present_flag);
+    stream_info_.delta_q_res_list.push_back(inspect_data->delta_q_res);
 
     // update overall stream info
     stream_info_.min_block_size =

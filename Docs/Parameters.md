@@ -271,6 +271,8 @@ SvtAv1EncApp -i in.y4m -b out.ivf --roi-map-file roi_map.txt
 |----------------------------------|----------------------------|----------------|-------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **TileRow**                      | --tile-rows                | [0-6]          | 0           | Number of tile rows to use, `TileRow == log2(x)`, default changes per resolution                                                                                      |
 | **TileCol**                      | --tile-columns             | [0-4]          | 0           | Number of tile columns to use, `TileCol == log2(x)`, default changes per resolution                                                                                   |
+| **TileMcts**                     | --mcts                     | [0-1]          | 0           | Enable motion-constrained encoding for one or more tiles with the restricted independent-decode profile (low-delay GOP, no loop filters, scaling, or film grain) |
+| **MctsBaseQp**                   | --mcts-base-qp             | -1, [1-63]     | -1          | Fix the MCTS CBR frame-header QP while controlling bitrate with superblock delta-Q; -1 disables |
 | **LoopFilterEnable**             | --enable-dlf               | [0-2]          | 1           | Deblocking loop filter control (1: enabled, 2: slower, more accurate filtering)                                                                                                                                       |
 | **CDEFLevel**                    | --enable-cdef              | [0-1]          | 1           | Enable Constrained Directional Enhancement Filter                                                                                                                     |
 | **EnableRestoration**            | --enable-restoration       | [0-1]          | 1           | Enable loop restoration filter                                                                                                                                        |
@@ -300,6 +302,46 @@ SvtAv1EncApp -i in.y4m -b out.ivf --roi-map-file roi_map.txt
 | **ResizeFrameKfDenoms**          | --frame-resz-kf-denoms     | [8-16]         | 8           | Frame scale denominator for key frames in event, in a list separated by ',', only applicable for mode == 4                                                            |
 | **ResizeFrameDenoms**            | --frame-resz-denoms        | [8-16]         | 8           | Frame scale denominator in event, in a list separated by ',', only applicable for mode == 4                                                                           |
 | **Avif**                         | --avif                     | [0-1]          | 0           | Enable still-picture coding optimizations for improved coding efficiency and reduced memory usage                                                                     |
+
+`--mcts` supports both a single tile (`--tile-columns 0 --tile-rows 0`)
+for later composition and multiple tiles. It applies an effective profile without changing the caller's
+configuration: single-tile encoding and multi-tile encoding without a bitrate target use CQP,
+with QP scaling and AQ disabled. Multi-tile encoding with a target bitrate uses low-delay CBR
+with AQ mode 2, two hierarchical levels, and one frame-level base quantizer. VBR requests
+are converted to CBR with a warning; requesting CBR or VBR without a separate target
+uses the encoder's default target. The bitrate is a target, not a guarantee.
+When using the API, select CBR or VBR explicitly for a target of exactly
+2,000,513 bits/s, which is also the default-target sentinel.
+For independent encoders that will be merged, `--mcts-base-qp` enables CBR
+with the same fixed frame-header QP on every frame, while each encoder chooses
+its effective quantizer according to its own target bitrate. This works with
+one or multiple tiles, and disables cyclic refresh in this mode. Set the same
+nonzero base QP, GOP/keyframe cadence, frame rate, bit depth and compatible
+frame-header settings on all encoders; inputs must be synchronized and tile
+edges superblock-aligned. A common base QP alone does not ensure merge
+compatibility. Lossless and VBR are rejected. Set `--rc 2` explicitly,
+especially with FFmpeg/GPAC, whose bitrate option may otherwise select VBR.
+For example, use `svtav1-params=mcts=1:mcts-base-qp=35:rc=2` with
+the desired bitrate on each encoder. Quantizer limits and content can prevent
+the target bitrate from being reached.
+The profile disables QP files/offsets, ROI, variance boost and luminance
+QP bias; uses low-delay prediction with closed key frames,
+lookahead 0, and scene-change detection, dynamic GOP, key-frame forcing, TF,
+overlays, and startup mini-GOP disabled. It also disables deblocking, CDEF,
+restoration, MFMV, screen-content tools, intra block copy, super-resolution,
+resize, film grain, quantization matrices, and high-precision/warped/global
+motion; motion references are constrained to every edge of the current tile,
+including outer frame edges. Motion vectors use full-pel precision on both luma
+and chroma (even-pixel luma displacements for 4:2:0), avoiding interpolation
+across borders. Unsafe inter candidates are rejected before coding.
+Deblocking is disabled entirely, not only across tile boundaries. Multi-pass,
+S-frames, and frame-resize events are rejected in this mode.
+Single-tile bitrate targets and maximum bitrate settings are ignored; use a fixed QP for
+separately encoded tiles. Maximum bitrate settings are also ignored for multi-tile CBR.
+If a requested split cannot produce multiple tiles at the selected frame and superblock
+size, a multi-tile CBR request is rejected.
+Separately encoded tiles must still use matching coding parameters, frame
+headers, and timestamps, with superblock-aligned internal borders, for merging.
 
 
 #### **Super-Resolution**

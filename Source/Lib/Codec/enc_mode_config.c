@@ -7436,7 +7436,9 @@ void svt_aom_sig_deriv_enc_dec_pd0(SequenceControlSet* scs, PictureControlSet* p
         // cost without coeff rate is already accurate : stay close to neutral.
 
         // QP component: linear interpolation from 1100 (q=0) to 950 (q=255)
-        const uint32_t base_q = pcs->ppcs->frm_hdr.quantization_params.base_q_idx;
+        const uint32_t base_q = scs->static_config.mcts_base_qp != -1
+            ? pcs->ppcs->rc_qindex
+            : pcs->ppcs->frm_hdr.quantization_params.base_q_idx;
         ctx->parent_cost_bias = 1100 - (base_q * 150 + 127) / 255;
 
         // ME variance component: fine-grained modulation based on SB complexity.
@@ -9187,6 +9189,13 @@ void svt_aom_sig_deriv_mode_decision_config_default(SequenceControlSet* scs, Pic
 #endif
     frm_hdr->is_motion_mode_switchable = frm_hdr->allow_warped_motion;
 #endif
+    if (scs->static_config.tile_mcts) {
+        pcs->wm_level                      = 0;
+        frm_hdr->allow_high_precision_mv   = 0;
+        frm_hdr->allow_warped_motion       = 0;
+        frm_hdr->is_motion_mode_switchable = 0;
+        ppcs->pic_obmc_level               = 0;
+    }
 
     if (enc_mode <= ENC_M9) {
         pcs->approx_inter_rate = 0;

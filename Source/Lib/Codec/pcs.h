@@ -811,6 +811,7 @@ typedef struct PictureParentControlSet {
     int8_t    transition_present; // -1: not computed
     bool      end_of_sequence_flag;
     uint8_t   picture_qp;
+    uint8_t   rc_qindex;
     uint32_t  tot_qindex;
     uint32_t  valid_qindex_area;
     uint8_t   avg_qp;

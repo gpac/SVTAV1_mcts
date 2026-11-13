@@ -1103,6 +1103,14 @@ typedef struct EbSvtAv1EncConfiguration {
      */
     uint8_t fast_decode_user_opts;
 
+    /* Restrict encoding tools and references so that tiles can be independently decoded.
+     * Also applies to a single tile intended for tile composition.
+     * Default is false. */
+    bool tile_mcts;
+
+    /* Fixed frame-header QP for MCTS CBR: -1 disables, 1..63 enables. */
+    int8_t mcts_base_qp;
+
     // clang-format off
     /* Add 128 Byte Padding to Struct to avoid changing the size of the public configuration struct */
     uint8_t padding[128
@@ -1111,6 +1119,8 @@ typedef struct EbSvtAv1EncConfiguration {
         - sizeof(bool) // add the ability to shut MCTF for key frames
         - sizeof(uint32_t) * 2 // max intra/inter bitrates
         - sizeof(bool) // enable_intrabc
+        - sizeof(bool) // tile_mcts
+        - sizeof(int8_t) // mcts_base_qp
         - sizeof(uint8_t) // max_managed_refs (ref-frame mgmt)
         - sizeof(uint8_t) // max_hierarchical_levels (runtime MG size change)
         - sizeof(uint8_t) // max_allowed_consecutive_frames_skips

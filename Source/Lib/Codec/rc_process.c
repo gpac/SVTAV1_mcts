@@ -402,6 +402,9 @@ static uint32_t update_lambda(PictureControlSet* pcs, uint8_t q_index, uint8_t m
     // To set gf_update_type based on current TL vs. the max TL (e.g. for 5L, max TL is 4)
     uint8_t temporal_layer_index = ppcs->temporal_layer_index;
     uint8_t max_temporal_layer   = ppcs->hierarchical_levels;
+    const uint8_t base_qindex = pcs->scs->static_config.mcts_base_qp != -1
+        ? ppcs->rc_qindex
+        : ppcs->frm_hdr.quantization_params.base_q_idx;
 
     // Update rdmult based on the frame's position in the miniGOP
     uint8_t gf_update_type = frame_type == KEY_FRAME ? SVT_AV1_KF_UPDATE
@@ -415,19 +418,19 @@ static uint32_t update_lambda(PictureControlSet* pcs, uint8_t q_index, uint8_t m
     if (pcs->scs->stats_based_sb_lambda_modulation) {
         int factor = 128;
         if (pcs->scs->static_config.rtc) {
-            int qdiff = me_q_index - ppcs->frm_hdr.quantization_params.base_q_idx;
+            int qdiff = me_q_index - base_qindex;
             if (qdiff < 0) {
                 factor = (qdiff <= -4) ? 100 : 115;
             }
         } else if (ppcs->frm_hdr.delta_q_params.delta_q_present || ppcs->r0_delta_qp_md) {
-            int qdiff = q_index - ppcs->frm_hdr.quantization_params.base_q_idx;
+            int qdiff = q_index - base_qindex;
             if (qdiff < 0) {
                 factor = (qdiff <= -8) ? 90 : 115;
             } else if (qdiff > 0) {
                 factor = (qdiff <= 8) ? 135 : 150;
             }
         } else {
-            int qdiff = me_q_index - ppcs->frm_hdr.quantization_params.base_q_idx;
+            int qdiff = me_q_index - base_qindex;
             if (qdiff < 0) {
                 factor = (qdiff <= -4) ? 100 : 115;
             } else if (qdiff > 0) {
@@ -882,7 +885,17 @@ EbErrorType svt_aom_rate_control_kernel_iter(void* context) {
             }
         }
 
+        if (scs->static_config.mcts_base_qp != -1)
+            ppcs->frm_hdr.delta_q_params.delta_q_res = 1;
         generate_sb_qindex(pcs);
+
+        if (scs->static_config.mcts_base_qp != -1) {
+            ppcs->rc_qindex = ppcs->frm_hdr.quantization_params.base_q_idx;
+            ppcs->frm_hdr.quantization_params.base_q_idx = quantizer_to_qindex[scs->static_config.mcts_base_qp];
+            // A fully skipped SB has no coefficients; entropy coding retains the previous tile Q until the next coded SB.
+            ppcs->frm_hdr.delta_q_params.delta_q_present = 1;
+            ppcs->frm_hdr.delta_q_params.delta_q_res     = 1;
+        }
 
         // Get Empty Rate Control Results Buffer
         EbObjectWrapper* rc_results_wrapper;

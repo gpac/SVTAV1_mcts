@@ -169,18 +169,21 @@ static void reset_enc_dec(EncDecContext* ed_ctx, PictureControlSet* pcs, Sequenc
     ed_ctx->is_16bit        = SVT_EFFECTIVE_IS_16BIT_PIPELINE(scs->is_16bit_pipeline);
     ed_ctx->bit_depth       = scs->static_config.encoder_bit_depth;
     uint16_t tile_group_idx = ed_ctx->tile_group_index;
+    const uint8_t qindex = scs->static_config.mcts_base_qp != -1
+        ? pcs->ppcs->rc_qindex
+        : pcs->ppcs->frm_hdr.quantization_params.base_q_idx;
     svt_aom_lambda_assign(pcs,
                           &ed_ctx->pic_fast_lambda[EB_8_BIT_MD],
                           &ed_ctx->pic_full_lambda[EB_8_BIT_MD],
                           EB_EIGHT_BIT,
-                          pcs->ppcs->frm_hdr.quantization_params.base_q_idx,
+                          qindex,
                           true);
 
     svt_aom_lambda_assign(pcs,
                           &ed_ctx->pic_fast_lambda[EB_10_BIT_MD],
                           &ed_ctx->pic_full_lambda[EB_10_BIT_MD],
                           EB_TEN_BIT,
-                          pcs->ppcs->frm_hdr.quantization_params.base_q_idx,
+                          qindex,
                           true);
     if (segment_index == 0) {
         if (ed_ctx->tile_group_index == 0) {
@@ -1241,7 +1244,9 @@ void pad_ref_and_set_flags(PictureControlSet* pcs, SequenceControlSet* scs) {
     ref_object->ref_poc = pcs->ppcs->picture_number;
 
     // set up the base_q_idx
-    ref_object->base_q_idx = pcs->ppcs->frm_hdr.quantization_params.base_q_idx;
+    ref_object->base_q_idx = scs->static_config.mcts_base_qp != -1
+        ? pcs->ppcs->rc_qindex
+        : pcs->ppcs->frm_hdr.quantization_params.base_q_idx;
 
     // set up the Slice Type
     ref_object->slice_type = pcs->ppcs->slice_type;

@@ -772,6 +772,12 @@ void SvtAv1E2ETestFramework::get_recon_frame(const SvtAv1Context &ctxt,
             recon->delete_frame(new_frame);
             break;
         } else {
+            if ((recon_frame.flags & EB_BUFFERFLAG_EOS) &&
+                recon_frame.n_filled_len == 0) {
+                is_eos = true;
+                recon->delete_frame(new_frame);
+                break;
+            }
             // adjust recon frame size if resize feature enabled in encoder
             if (recon_frame.n_filled_len != new_frame->buf_size &&
                 recon_frame.metadata) {

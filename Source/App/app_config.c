@@ -133,6 +133,8 @@
 #define RECODE_LOOP_TOKEN "--recode-loop"
 #define TILE_ROW_TOKEN "--tile-rows"
 #define TILE_COL_TOKEN "--tile-columns"
+#define MCTS_TOKEN "--mcts"
+#define MCTS_BASE_QP_TOKEN "--mcts-base-qp"
 
 #define SCENE_CHANGE_DETECTION_TOKEN "--scd"
 #define INJECTOR_TOKEN "--inj" // no Eval
@@ -934,6 +936,10 @@ ConfigDescription config_entry_specific[] = {
     {TILE_ROW_TOKEN, "Number of tile rows to use, `TileRow == log2(x)`, default changes per resolution but is 1 [0-6]"},
     {TILE_COL_TOKEN,
      "Number of tile columns to use, `TileCol == log2(x)`, default changes per resolution but is 1 [0-4]"},
+    {MCTS_TOKEN,
+     "Enable motion-constrained encoding for one or more tiles and apply a restricted, independently "
+     "decodable profile, default is 0 [0-1]"},
+    {MCTS_BASE_QP_TOKEN, "Fixed frame-header QP for MCTS CBR, default is -1 [-1: off, 1-63]"},
 
     // DLF
     {LOOP_FILTER_ENABLE, "Deblocking loop filter control, default is 1 [0-2]"},
@@ -1179,6 +1185,8 @@ ConfigEntry config_entry[] = {
     // AV1 Specific Options
     {TILE_ROW_TOKEN, "TileRow", set_cfg_generic_token},
     {TILE_COL_TOKEN, "TileCol", set_cfg_generic_token},
+    {MCTS_TOKEN, "TileMcts", set_cfg_generic_token},
+    {MCTS_BASE_QP_TOKEN, "MctsBaseQp", set_cfg_generic_token},
     {LOOP_FILTER_ENABLE, "LoopFilterEnable", set_cfg_generic_token},
     {CDEF_ENABLE_TOKEN, "CDEFLevel", set_cdef_enable},
     {ENABLE_RESTORATION_TOKEN, "EnableRestoration", set_cfg_generic_token},

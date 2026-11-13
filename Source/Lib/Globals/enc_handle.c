@@ -4405,17 +4405,133 @@ static void set_still_image_fast_decode(SequenceControlSet* scs, const EbSvtAv1E
 }
 #endif // CONFIG_ENABLE_FAST_DECODE_3
 
+static EbErrorType apply_tile_mcts_profile(EbSvtAv1EncConfiguration* config) {
+    const bool fixed_base = config->mcts_base_qp != -1;
+    if (fixed_base && (!config->tile_mcts || config->mcts_base_qp < 1 || config->mcts_base_qp > 63 ||
+                       config->lossless || config->max_qp_allowed == 0)) {
+        SVT_ERROR("--mcts-base-qp requires --mcts, a QP in [1,63], and lossy encoding.\n");
+        return EB_ErrorBadParameter;
+    }
+    if (!config->tile_mcts) {
+        return EB_ErrorNone;
+    }
+
+    if (fixed_base && (config->rate_control_mode == SVT_AV1_RC_MODE_VBR ||
+                       (config->rate_control_mode != SVT_AV1_RC_MODE_CBR &&
+                        config->target_bit_rate == DEFAULT_TBR))) {
+        SVT_ERROR("--mcts-base-qp requires CBR or an explicit target bitrate; VBR is not supported.\n");
+        return EB_ErrorBadParameter;
+    }
+    if (config->pass != ENC_SINGLE_PASS || config->sframe_dist != 0 || config->sframe_posi.sframe_posis ||
+        config->frame_scale_evts.evt_num != 0) {
+        SVT_ERROR("--mcts does not support multi-pass, S-frames, or frame resize events.\n");
+        return EB_ErrorBadParameter;
+    }
+
+    const bool multiple_tiles = config->tile_columns > 0 || config->tile_rows > 0;
+    const bool use_cbr        = (multiple_tiles || fixed_base) &&
+        (config->rate_control_mode == SVT_AV1_RC_MODE_VBR || config->rate_control_mode == SVT_AV1_RC_MODE_CBR ||
+         (config->rate_control_mode == SVT_AV1_RC_MODE_CQP_OR_CRF && config->target_bit_rate != DEFAULT_TBR));
+
+    if (use_cbr && config->target_bit_rate == 0) {
+        SVT_ERROR("--mcts CBR requires a nonzero target bitrate.\n");
+        return EB_ErrorBadParameter;
+    }
+
+    if (use_cbr && config->rate_control_mode != SVT_AV1_RC_MODE_CBR) {
+        SVT_WARN("--mcts uses low-delay CBR for the requested target bitrate.\n");
+    }
+    if (!use_cbr && (config->target_bit_rate != DEFAULT_TBR || config->max_bit_rate != 0)) {
+        SVT_WARN("--mcts uses CQP; target and maximum bitrate settings are ignored.\n");
+    } else if (use_cbr && config->max_bit_rate != 0) {
+        SVT_WARN("--mcts CBR ignores the maximum bitrate setting; CBR uses the target bitrate and buffer.\n");
+    }
+    if (use_cbr && (config->gop_constraint_rc || config->startup_qp_offset)) {
+        SVT_WARN("--mcts CBR disables GOP-constrained VBR and the startup QP offset.\n");
+    }
+
+    SVT_WARN(
+        "--mcts applies a restricted profile: %s, low-delay GOP with closed key frames and without "
+        "scene-change detection/dynamic GOP/temporal filtering/overlays, deblocking/CDEF/restoration disabled, "
+        "MFMV/screen-content tools/scaling/film grain/quantization matrices disabled, full-pel motion search, and "
+        "global/warped motion disabled.\n",
+        fixed_base ? "CBR with fixed frame QP and superblock delta-Q"
+                   : use_cbr ? "CBR with adaptive quantization" : "CQP with QP scaling and AQ disabled");
+
+    config->pred_structure      = LOW_DELAY;
+    config->hierarchical_levels = use_cbr ? 2 : 3;
+    config->intra_refresh_type  = SVT_AV1_KF_REFRESH;
+    config->rtc                 = false;
+    if (use_cbr) {
+        config->rate_control_mode = SVT_AV1_RC_MODE_CBR;
+        config->aq_mode           = 2;
+        config->gop_constraint_rc = false;
+        config->startup_qp_offset = 0;
+    } else {
+        config->rate_control_mode = SVT_AV1_RC_MODE_CQP_OR_CRF;
+        config->aq_mode           = 0;
+        config->target_bit_rate   = DEFAULT_TBR;
+    }
+    config->max_bit_rate                         = 0;
+    config->scene_change_detection               = 0;
+    config->enable_dg                            = false;
+    config->look_ahead_distance                  = 0;
+    config->enable_tf                            = 0;
+    config->enable_tf_key                        = false;
+    config->enable_overlays                      = false;
+    config->startup_mg_size                      = 0;
+    config->force_key_frames                     = false;
+    config->enable_dlf_flag                      = 0;
+    config->cdef_level                           = 0;
+    config->enable_restoration_filtering         = 0;
+    config->enable_mfmv                          = 0;
+    config->screen_content_mode                  = 0;
+    config->enable_intrabc                       = false;
+    config->superres_mode                        = SUPERRES_NONE;
+    config->resize_mode                          = RESIZE_NONE;
+    config->film_grain_denoise_strength          = 0;
+    config->film_grain_denoise_apply             = 0;
+    config->fgs_table                            = NULL;
+    config->adaptive_film_grain                  = false;
+    config->enable_qm                            = false;
+    config->fast_decode                          = 0;
+    config->fast_decode_user_opts                = 0;
+    config->tune                                 = TUNE_PSNR;
+    config->use_qp_file                          = false;
+    config->use_fixed_qindex_offsets             = 0;
+    config->key_frame_chroma_qindex_offset       = 0;
+    config->key_frame_qindex_offset              = 0;
+    config->luma_y_dc_qindex_offset              = 0;
+    config->chroma_u_dc_qindex_offset            = 0;
+    config->chroma_u_ac_qindex_offset            = 0;
+    config->chroma_v_dc_qindex_offset            = 0;
+    config->chroma_v_ac_qindex_offset            = 0;
+    config->enable_roi_map                       = false;
+    config->enable_variance_boost                = false;
+    config->luminance_qp_bias                    = 0;
+    config->qp_scale_compress_strength           = 0;
+    config->max_managed_refs                     = 0;
+    config->max_hierarchical_levels              = 0;
+    config->max_allowed_consecutive_frames_skips = 0;
+    memset(config->qindex_offsets, 0, sizeof(config->qindex_offsets));
+    memset(config->chroma_qindex_offsets, 0, sizeof(config->chroma_qindex_offsets));
+
+    return EB_ErrorNone;
+}
+
 static void copy_api_from_app(SequenceControlSet* scs, EbSvtAv1EncConfiguration* config_struct) {
     scs->max_input_luma_width  = config_struct->source_width;
     scs->max_input_luma_height = config_struct->source_height;
     // SB Definitions
     scs->static_config.pred_structure = config_struct->pred_structure;
+    scs->static_config.tile_mcts      = config_struct->tile_mcts;
+    scs->static_config.mcts_base_qp   = config_struct->mcts_base_qp;
     scs->static_config.rtc            = config_struct->rtc;
     if (SVT_RTC_TUNE(scs) && scs->static_config.pred_structure != LOW_DELAY) {
         scs->static_config.pred_structure = LOW_DELAY;
         SVT_WARN("Forcing low delay pred structure for RTC.\n");
     }
-    scs->enable_qp_scaling_flag = scs->allintra ? 0 : 1;
+    scs->enable_qp_scaling_flag = scs->allintra || config_struct->tile_mcts ? 0 : 1;
     // Set Picture Parameters for statistics gathering
     scs->picture_analysis_number_of_regions_per_width  = scs->max_input_luma_width >= 64
         ? HIGHER_THAN_CLASS_1_REGION_SPLIT_PER_WIDTH
@@ -4964,9 +5080,14 @@ EB_API EbErrorType svt_av1_enc_set_parameter(EbComponentType*          svt_enc_c
 
     EbEncHandle*        enc_handle = (EbEncHandle*)svt_enc_component->p_component_private;
     SequenceControlSet* scs        = enc_handle->scs_instance->scs;
-    copy_api_from_app(scs, config_struct);
+    EbSvtAv1EncConfiguration effective_config = *config_struct;
+    EbErrorType              return_error     = apply_tile_mcts_profile(&effective_config);
+    if (return_error != EB_ErrorNone) {
+        return return_error;
+    }
+    copy_api_from_app(scs, &effective_config);
 
-    EbErrorType return_error = svt_av1_verify_settings(scs);
+    return_error = svt_av1_verify_settings(scs);
 
     if (return_error == EB_ErrorBadParameter) {
         return EB_ErrorBadParameter;
@@ -5013,6 +5134,14 @@ EB_API EbErrorType svt_av1_enc_set_parameter(EbComponentType*          svt_enc_c
     }
 
     set_param_based_on_input(scs);
+
+    if (scs->static_config.tile_mcts && scs->static_config.mcts_base_qp == -1 &&
+        scs->static_config.rate_control_mode == SVT_AV1_RC_MODE_CBR &&
+        !(scs->static_config.tile_columns > 0 && scs->static_config.source_width > scs->sb_size) &&
+        !(scs->static_config.tile_rows > 0 && scs->static_config.source_height > scs->sb_size)) {
+        SVT_ERROR("--mcts CBR requires a tile layout with more than one tile at the selected frame size.\n");
+        return EB_ErrorBadParameter;
+    }
 
     // LTR pins anchors in DPB slots {4,5,6,7} (svt_aom_ref_mgmt_storeable_slots_mask).
     // That is only safe while the regular refs stay in the bottom 4, i.e. ref counts

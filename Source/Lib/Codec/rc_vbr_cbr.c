@@ -915,6 +915,10 @@ static void cyclic_refresh_init(PictureParentControlSet* ppcs) {
 
     cr->apply_cyclic_refresh = (ppcs->slice_type != I_SLICE && ppcs->temporal_layer_index == 0);
 
+    if (scs->static_config.mcts_base_qp != -1) {
+        cr->apply_cyclic_refresh = 0;
+    }
+
     if (scs->super_block_size != 64) {
         cr->apply_cyclic_refresh = 0;
     }
@@ -1336,6 +1340,10 @@ void svt_av1_rc_calc_qindex_rate_control(PictureControlSet* pcs, SequenceControl
 
     new_qindex = clamp_qindex(scs, new_qindex);
 
+    if (scs->static_config.mcts_base_qp != -1) {
+        new_qindex = AOMMAX(1, new_qindex);
+    }
+
     if (scs->enc_ctx->rc_cfg.mode == AOM_CBR) {
         // CR is not used in qindex derivation, so compute it all here
         cyclic_refresh_init(ppcs);
@@ -1361,7 +1369,9 @@ static void av1_rc_update_rate_correction_factors(PictureParentControlSet* ppcs,
     CyclicRefresh*      cr                     = &ppcs->cyclic_refresh;
     FrameType           frame_type             = ppcs->frm_hdr.frame_type;
     EbBitDepth          bit_depth              = scs->static_config.encoder_bit_depth;
-    int                 base_q_idx             = ppcs->frm_hdr.quantization_params.base_q_idx;
+    int                 base_q_idx             = scs->static_config.mcts_base_qp != -1
+        ? ppcs->rc_qindex
+        : ppcs->frm_hdr.quantization_params.base_q_idx;
     int                 correction_factor      = 100;
     double              rate_correction_factor = get_rate_correction_factor(ppcs, width, height);
     double              adjustment_limit;
@@ -1504,7 +1514,7 @@ void svt_av1_rc_postencode_update_gop_const(PictureParentControlSet* ppcs) {
     int                              height        = ppcs->av1_cm->frm_size.frame_height;
     int                              is_intrnl_arf = ppcs->update_type == SVT_AV1_INTNL_ARF_UPDATE;
 
-    int qindex = frm_hdr->quantization_params.base_q_idx;
+    int qindex = scs->static_config.mcts_base_qp != -1 ? ppcs->rc_qindex : frm_hdr->quantization_params.base_q_idx;
 
     // Update rate control heuristics
     ppcs->projected_frame_size = (int)ppcs->total_num_bits;
@@ -1571,7 +1581,7 @@ void svt_av1_rc_postencode_update(PictureParentControlSet* ppcs) {
     int                 height        = ppcs->av1_cm->frm_size.frame_height;
     int                 is_intrnl_arf = ppcs->update_type == SVT_AV1_INTNL_ARF_UPDATE;
 
-    int qindex = frm_hdr->quantization_params.base_q_idx;
+    int qindex = scs->static_config.mcts_base_qp != -1 ? ppcs->rc_qindex : frm_hdr->quantization_params.base_q_idx;
 
     // Update rate control heuristics
     ppcs->projected_frame_size = (int)ppcs->total_num_bits;

@@ -52,6 +52,10 @@ static void set_global_motion_field(PictureControlSet* pcs) {
         pcs->ppcs->global_motion[frame_index].wmmat[5] = (1 << WARPEDMODEL_PREC_BITS);
     }
 
+    if (pcs->scs->static_config.tile_mcts) {
+        return;
+    }
+
     //Update MV
     PictureParentControlSet* ppcs = pcs->ppcs;
     for (frame_index = INTRA_FRAME; frame_index <= ALTREF_FRAME; ++frame_index) {
@@ -107,7 +111,9 @@ void svt_av1_build_quantizer(PictureParentControlSet* pcs, EbBitDepth bit_depth,
         int32_t qzbin_factor     = svt_aom_get_qzbin_factor(q, bit_depth);
         int32_t qrounding_factor = q == 0 ? 64 : 48;
         //  diff: q-range diff based on current quantizer
-        int           diff          = q - pcs->frm_hdr.quantization_params.base_q_idx;
+        int           diff          = q - (pcs->scs->static_config.mcts_base_qp != -1
+                                               ? pcs->rc_qindex
+                                               : pcs->frm_hdr.quantization_params.base_q_idx);
         const int32_t sharpness_val = pcs->scs->static_config.sharpness;
 
         // cppcheck claims that the second condition is always false, giving the deduction that diff is always < 1.

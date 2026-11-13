@@ -125,6 +125,9 @@ class RefDecoder {
         uint32_t
             ext_block_flag; /**< if contains extended block, 0--no, 1--yes */
         std::vector<uint32_t> qindex_list;
+        std::vector<int> base_qindex_list;
+        std::vector<int> delta_q_present_list;
+        std::vector<int> delta_q_res_list;
         int16_t max_qindex;
         int16_t min_qindex;
         int32_t max_intra_period;

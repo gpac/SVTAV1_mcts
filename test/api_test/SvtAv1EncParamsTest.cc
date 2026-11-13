@@ -304,7 +304,139 @@ PARAM_TEST(EncParamTileColsTest);
 /** Test case for tile_rows*/
 DEFINE_PARAM_TEST_CLASS(EncParamTileRowsTest, tile_rows);
 PARAM_TEST(EncParamTileRowsTest);
+
+/** Test case for tile_mcts*/
+DEFINE_PARAM_TEST_CLASS(EncParamTileMctsTest, tile_mcts);
+PARAM_TEST(EncParamTileMctsTest);
 #endif
+
+class TileMctsValidationTest : public EncParamTestBase {
+  public:
+    void run_default_param_check() override {
+    }
+    void run_valid_param_check() override {
+    }
+    void run_invalid_param_check() override {
+    }
+    void run_special_param_check() override {
+    }
+};
+
+TEST_F(TileMctsValidationTest, AcceptsSingleTileWithoutMutatingCaller) {
+    ctxt_.enc_params.tile_mcts = true;
+    ctxt_.enc_params.tile_columns = 0;
+    ctxt_.enc_params.tile_rows = 0;
+    ctxt_.enc_params.enable_dlf_flag = 1;
+    ctxt_.enc_params.cdef_level = 1;
+    ctxt_.enc_params.enable_restoration_filtering = 1;
+    EXPECT_EQ(EB_ErrorNone,
+              svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+    EXPECT_EQ(0, ctxt_.enc_params.tile_columns);
+    EXPECT_EQ(0, ctxt_.enc_params.tile_rows);
+    EXPECT_EQ(1, ctxt_.enc_params.enable_dlf_flag);
+    EXPECT_EQ(1, ctxt_.enc_params.cdef_level);
+    EXPECT_EQ(1, ctxt_.enc_params.enable_restoration_filtering);
+}
+
+TEST_F(TileMctsValidationTest, RejectsSFramesForSingleTile) {
+    ctxt_.enc_params.tile_mcts = true;
+    ctxt_.enc_params.tile_columns = 0;
+    ctxt_.enc_params.tile_rows = 0;
+    ctxt_.enc_params.sframe_dist = 8;
+    EXPECT_EQ(EB_ErrorBadParameter,
+              svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+}
+
+TEST_F(TileMctsValidationTest, ConvertsMultiTileBitrateWithoutMutatingCaller) {
+    ctxt_.enc_params.tile_mcts = true;
+    ctxt_.enc_params.tile_columns = 1;
+    ctxt_.enc_params.tile_rows = 1;
+    ctxt_.enc_params.rate_control_mode = SVT_AV1_RC_MODE_VBR;
+    ctxt_.enc_params.intra_refresh_type = SVT_AV1_FWDKF_REFRESH;
+    ctxt_.enc_params.target_bit_rate = 1000000;
+    ctxt_.enc_params.max_bit_rate = 2000000;
+    EXPECT_EQ(EB_ErrorNone,
+              svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+    EXPECT_EQ(SVT_AV1_RC_MODE_VBR, ctxt_.enc_params.rate_control_mode);
+    EXPECT_EQ(SVT_AV1_FWDKF_REFRESH, ctxt_.enc_params.intra_refresh_type);
+    EXPECT_EQ(1000000u, ctxt_.enc_params.target_bit_rate);
+    EXPECT_EQ(2000000u, ctxt_.enc_params.max_bit_rate);
+}
+
+TEST_F(TileMctsValidationTest, IgnoresSingleTileBitrateWithoutMutatingCaller) {
+    ctxt_.enc_params.tile_mcts = true;
+    ctxt_.enc_params.tile_columns = 0;
+    ctxt_.enc_params.tile_rows = 0;
+    ctxt_.enc_params.rate_control_mode = SVT_AV1_RC_MODE_CBR;
+    ctxt_.enc_params.target_bit_rate = 1000000;
+    EXPECT_EQ(EB_ErrorNone,
+              svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+    EXPECT_EQ(SVT_AV1_RC_MODE_CBR, ctxt_.enc_params.rate_control_mode);
+    EXPECT_EQ(1000000u, ctxt_.enc_params.target_bit_rate);
+}
+
+TEST_F(TileMctsValidationTest,
+       RejectsBitrateWhenRequestedSplitCannotProduceTiles) {
+    ctxt_.enc_params.tile_mcts = true;
+    ctxt_.enc_params.source_width = 64;
+    ctxt_.enc_params.source_height = 64;
+    ctxt_.enc_params.tile_columns = 1;
+    ctxt_.enc_params.tile_rows = 0;
+    ctxt_.enc_params.target_bit_rate = 1000000;
+    EXPECT_EQ(EB_ErrorBadParameter,
+              svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+}
+
+TEST_F(TileMctsValidationTest, RejectsInvalidMultiTileTargetBitrates) {
+    ctxt_.enc_params.tile_mcts = true;
+    ctxt_.enc_params.tile_columns = 1;
+    ctxt_.enc_params.rate_control_mode = SVT_AV1_RC_MODE_CBR;
+    for (uint32_t bitrate : {0u, 100000001u}) {
+        ctxt_.enc_params.target_bit_rate = bitrate;
+        EXPECT_EQ(
+            EB_ErrorBadParameter,
+            svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+    }
+}
+
+TEST_F(TileMctsValidationTest, FixedBaseRequiresLossyMctsCbr) {
+    ctxt_.enc_params.mcts_base_qp = 35;
+    EXPECT_EQ(EB_ErrorBadParameter,
+              svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+    ctxt_.enc_params.tile_mcts = true;
+    EXPECT_EQ(EB_ErrorBadParameter,
+              svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+    ctxt_.enc_params.rate_control_mode = SVT_AV1_RC_MODE_CBR;
+    ctxt_.enc_params.target_bit_rate = 300000;
+    EXPECT_EQ(EB_ErrorNone,
+              svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+    ctxt_.enc_params.mcts_base_qp = 0;
+    EXPECT_EQ(EB_ErrorBadParameter,
+              svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+    ctxt_.enc_params.mcts_base_qp = 64;
+    EXPECT_EQ(EB_ErrorBadParameter,
+              svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+    ctxt_.enc_params.mcts_base_qp = -2;
+    EXPECT_EQ(EB_ErrorBadParameter,
+              svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+    ctxt_.enc_params.mcts_base_qp = 35;
+    ctxt_.enc_params.rate_control_mode = SVT_AV1_RC_MODE_VBR;
+    EXPECT_EQ(EB_ErrorBadParameter,
+              svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+    ctxt_.enc_params.rate_control_mode = SVT_AV1_RC_MODE_CBR;
+    ctxt_.enc_params.lossless = true;
+    EXPECT_EQ(EB_ErrorBadParameter,
+              svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+}
+
+TEST_F(TileMctsValidationTest, ParsesMctsOption) {
+    EXPECT_EQ(EB_ErrorNone, svt_av1_enc_parse_parameter(&ctxt_.enc_params, "mcts", "1"));
+    EXPECT_TRUE(ctxt_.enc_params.tile_mcts);
+    EXPECT_EQ(EB_ErrorBadParameter,
+              svt_av1_enc_parse_parameter(&ctxt_.enc_params, "tile-mcts", "1"));
+    EXPECT_EQ(EB_ErrorNone, svt_av1_enc_parse_parameter(&ctxt_.enc_params, "mcts-base-qp", "35"));
+    EXPECT_EQ(35, ctxt_.enc_params.mcts_base_qp);
+}
 
 /** Test case for screen_content_mode*/
 DEFINE_PARAM_TEST_CLASS(EncParamScreenContentModeTest, screen_content_mode);

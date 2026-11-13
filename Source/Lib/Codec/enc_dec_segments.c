@@ -74,6 +74,10 @@ void svt_aom_enc_dec_segments_init(EncDecSegments* segments_ptr, uint32_t segCol
     segRowCount = (segRowCount < pic_height_sb) ? segRowCount : pic_height_sb;
     segRowCount = (segRowCount < segments_ptr->segment_max_row_count) ? segRowCount
                                                                       : segments_ptr->segment_max_row_count;
+    // A one-SB-wide group has no overlapping bands to trigger the next row.
+    if (pic_width_sb == 1) {
+        segRowCount = 1;
+    }
 
     segments_ptr->sb_row_count       = pic_height_sb;
     segments_ptr->sb_band_count      = BAND_TOTAL_COUNT(pic_height_sb, pic_width_sb);

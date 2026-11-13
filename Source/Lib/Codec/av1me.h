@@ -28,6 +28,17 @@ extern "C" {
 // Maximum size of the first step in full pel units
 #define MAX_FIRST_STEP (1 << (MAX_MVSEARCH_STEPS - 1))
 
+static INLINE void svt_av1_constrain_mv_limits_to_tile(MvLimits* mv_limits, const TileInfo* tile, int mi_row,
+                                                       int mi_col, int block_width, int block_height, int frame_width,
+                                                       int frame_height) {
+    const int right    = AOMMIN(tile->mi_col_end * MI_SIZE, frame_width);
+    const int bottom   = AOMMIN(tile->mi_row_end * MI_SIZE, frame_height);
+    mv_limits->col_min = AOMMAX(mv_limits->col_min, (tile->mi_col_start - mi_col) * MI_SIZE);
+    mv_limits->col_max = AOMMIN(mv_limits->col_max, AOMMAX(0, right - mi_col * MI_SIZE - block_width));
+    mv_limits->row_min = AOMMAX(mv_limits->row_min, (tile->mi_row_start - mi_row) * MI_SIZE);
+    mv_limits->row_max = AOMMIN(mv_limits->row_max, AOMMAX(0, bottom - mi_row * MI_SIZE - block_height));
+}
+
 // motion search site
 typedef struct SearchSite {
     Mv  mv;

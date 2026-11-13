@@ -893,6 +893,9 @@ static const vector<int32_t> invalid_tile_rows = {
     -1,
     7,
 };
+static const vector<bool> default_tile_mcts = {false};
+static const vector<bool> valid_tile_mcts = {false, true};
+static const vector<bool> invalid_tile_mcts = {};
 #endif
 
 /* Flag to signal the content being a screen sharing content type

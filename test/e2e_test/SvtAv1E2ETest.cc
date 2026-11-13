@@ -429,7 +429,36 @@ class TileIndependenceTest : public SvtAv1E2ETestFramework {
         enable_stat = true;
         enable_config = true;
         enable_invert_tile_decoding = true;
+        enable_analyzer = enc_setting.name == "TileMctsCbr" ||
+                          enc_setting.name == "TileMctsVbr" ||
+                          enc_setting.name == "TileMctsTarget" ||
+                          enc_setting.name == "TileMctsFixedBase" ||
+                          enc_setting.name == "TileMctsFixedBaseMulti" ||
+                          enc_setting.name == "TileMctsFixedBaseMin" ||
+                          enc_setting.name == "TileMctsFixedBaseMax" ||
+                          enc_setting.name == "TileMctsSingleBitrate";
         SvtAv1E2ETestFramework::config_test();
+    }
+
+    void post_process() override {
+        if (enable_analyzer) {
+            const auto *info = refer_dec_->get_stream_info();
+            if (enc_setting.name.find("TileMctsFixedBase") == 0) {
+                const int expected_base = enc_setting.name == "TileMctsFixedBaseMin" ? 4 :
+                    enc_setting.name == "TileMctsFixedBaseMax" ? 255 : 140;
+                ASSERT_EQ(48u, info->base_qindex_list.size());
+                for (size_t i = 0; i < info->base_qindex_list.size(); ++i) {
+                    ASSERT_EQ(expected_base, info->base_qindex_list[i]);
+                    ASSERT_EQ(1, info->delta_q_present_list[i]);
+                    ASSERT_EQ(1, info->delta_q_res_list[i]);
+                }
+            }
+            if (enc_setting.name == "TileMctsSingleBitrate")
+                ASSERT_EQ(info->min_qindex, info->max_qindex);
+            else
+                ASSERT_LT(info->min_qindex, info->max_qindex);
+        }
+        SvtAv1E2ETestFramework::post_process();
     }
 };
 
@@ -437,14 +466,161 @@ TEST_P(TileIndependenceTest, TileTest) {
     run_death_test();
 }
 
+static const std::vector<TestVideoVector> tile_mcts_test_vectors = {
+    std::make_tuple("tile_mcts_8bit", DUMMY_SOURCE, IMG_FMT_420, 256, 256, 8,
+                    false, 0, 48),
+    std::make_tuple("tile_mcts_10bit", DUMMY_SOURCE, IMG_FMT_420, 256, 256, 10,
+                    false, 0, 48),
+    std::make_tuple("tile_mcts_partial_sb", DUMMY_SOURCE, IMG_FMT_420, 256, 248,
+                    8, false, 0, 48)};
+
+static const std::vector<TestVideoVector> narrow_tile_test_vectors = {
+    std::make_tuple("tile_mcts_narrow", DUMMY_SOURCE, IMG_FMT_420, 640, 384, 8,
+                    false, 0, 24),
+    std::make_tuple("tile_mcts_narrow_10bit", DUMMY_SOURCE, IMG_FMT_420, 640,
+                    384, 10, false, 0, 24),
+    std::make_tuple("tile_mcts_narrow_partial", DUMMY_SOURCE, IMG_FMT_420, 640,
+                    360, 8, false, 0, 24)};
+
 static const std::vector<EncTestSetting> tile_settings = {
     {"TileTest1", {{"TileCol", "0"}, {"TileRow", "0"}}, default_test_vectors},
     {"TileTest2", {{"TileCol", "0"}, {"TileRow", "1"}}, default_test_vectors},
     {"TileTest3", {{"TileCol", "1"}, {"TileRow", "0"}}, default_test_vectors},
-    {"TileTest4", {{"TileCol", "1"}, {"TileRow", "1"}}, default_test_vectors}};
+    {"TileTest4", {{"TileCol", "1"}, {"TileRow", "1"}}, default_test_vectors},
+    {"TileMctsSingle",
+     {{"TileCol", "0"},
+      {"TileRow", "0"},
+      {"TileMcts", "1"},
+      {"LevelOfParallelism", "1"}},
+     tile_mcts_test_vectors},
+    {"TileMctsSingleBitrate",
+     {{"TileCol", "0"},
+      {"TileRow", "0"},
+      {"TileMcts", "1"},
+      {"RateControlMode", "2"},
+      {"TargetBitRate", "300"},
+      {"LevelOfParallelism", "1"}},
+     tile_mcts_test_vectors},
+    {"TileMctsFixedBase",
+     {{"TileCol", "0"},
+      {"TileRow", "0"},
+      {"TileMcts", "1"},
+      {"MctsBaseQp", "35"},
+      {"RateControlMode", "2"},
+      {"TargetBitRate", "300"},
+      {"LevelOfParallelism", "1"}},
+     tile_mcts_test_vectors},
+    {"TileMctsFixedBaseMulti",
+     {{"TileCol", "1"},
+      {"TileRow", "1"},
+      {"TileMcts", "1"},
+      {"MctsBaseQp", "35"},
+      {"RateControlMode", "2"},
+      {"TargetBitRate", "300"},
+      {"LevelOfParallelism", "1"}},
+     tile_mcts_test_vectors},
+    {"TileMctsFixedBaseMin",
+     {{"TileCol", "0"},
+      {"TileRow", "0"},
+      {"TileMcts", "1"},
+      {"MctsBaseQp", "1"},
+      {"RateControlMode", "2"},
+      {"TargetBitRate", "80"},
+      {"LevelOfParallelism", "1"}},
+     tile_mcts_test_vectors},
+    {"TileMctsFixedBaseMax",
+     {{"TileCol", "0"},
+      {"TileRow", "0"},
+      {"TileMcts", "1"},
+      {"MctsBaseQp", "63"},
+      {"RateControlMode", "2"},
+      {"TargetBitRate", "1000"},
+      {"LevelOfParallelism", "1"}},
+     tile_mcts_test_vectors},
+    {"TileMcts",
+     {{"TileCol", "1"},
+      {"TileRow", "1"},
+      {"TileMcts", "1"},
+      {"LevelOfParallelism", "1"}},
+     tile_mcts_test_vectors},
+    {"TileMctsCbr",
+     {{"TileCol", "1"},
+      {"TileRow", "1"},
+      {"TileMcts", "1"},
+      {"RateControlMode", "2"},
+      {"TargetBitRate", "300"},
+      {"LevelOfParallelism", "1"}},
+     tile_mcts_test_vectors},
+    {"TileMctsTarget",
+     {{"TileCol", "1"},
+      {"TileRow", "1"},
+      {"TileMcts", "1"},
+      {"TargetBitRate", "300"},
+      {"LevelOfParallelism", "1"}},
+     tile_mcts_test_vectors},
+    {"TileMctsVbr",
+     {{"TileCol", "1"},
+      {"TileRow", "1"},
+      {"TileMcts", "1"},
+      {"RateControlMode", "1"},
+      {"TargetBitRate", "300"},
+      {"LevelOfParallelism", "1"}},
+     tile_mcts_test_vectors}};
 
 INSTANTIATE_TEST_SUITE_P(TILETEST, TileIndependenceTest,
                          ::testing::ValuesIn(tile_settings),
+                         EncTestSetting::GetSettingName);
+
+class NarrowTileSchedulingTest : public SvtAv1E2ETestFramework {
+  protected:
+    void config_test() override {
+        enable_decoder = true;
+        enable_recon = true;
+        enable_config = true;
+        enable_invert_tile_decoding = true;
+        SvtAv1E2ETestFramework::config_test();
+    }
+
+    void post_process() override {
+        ASSERT_EQ(24u, frame_sizes_.size());
+        for (uint32_t i = 0; i < 24; ++i) {
+            const auto *frame = recon_queue_->take_frame_inorder(i);
+            ASSERT_NE(nullptr, frame);
+            ASSERT_EQ(i, frame->timestamp);
+        }
+        ASSERT_EQ(nullptr, recon_queue_->take_frame_inorder(24));
+        SvtAv1E2ETestFramework::post_process();
+    }
+};
+
+TEST_P(NarrowTileSchedulingTest, EncodesAllFrames) {
+    run_death_test();
+}
+
+static const std::vector<EncTestSetting> narrow_tile_settings = {
+    {"TileMctsNarrow",
+     {{"TileCol", "2"},
+      {"TileRow", "1"},
+      {"TileMcts", "1"},
+      {"LevelOfParallelism", "4"}},
+     narrow_tile_test_vectors},
+    {"TileLowDelayNarrow",
+     {{"TileCol", "2"},
+      {"TileRow", "1"},
+      {"PredStructure", "1"},
+      {"LevelOfParallelism", "4"}},
+     narrow_tile_test_vectors},
+    {"TileMctsCbrNarrow",
+     {{"TileCol", "2"},
+      {"TileRow", "1"},
+      {"TileMcts", "1"},
+      {"RateControlMode", "2"},
+      {"TargetBitRate", "500"},
+      {"LevelOfParallelism", "4"}},
+     narrow_tile_test_vectors}};
+
+INSTANTIATE_TEST_SUITE_P(TILETEST, NarrowTileSchedulingTest,
+                         ::testing::ValuesIn(narrow_tile_settings),
                          EncTestSetting::GetSettingName);
 
 /**

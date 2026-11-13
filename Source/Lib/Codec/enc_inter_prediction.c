@@ -318,7 +318,9 @@ static void model_rd_with_curvfit(PictureControlSet* pcs, BlockSize plane_bsize,
                                   int* rate, int64_t* dist, ModeDecisionContext* ctx, uint32_t rdmult) {
     (void)plane_bsize;
     const int           dequant_shift   = 3;
-    int32_t             current_q_index = pcs->ppcs->frm_hdr.quantization_params.base_q_idx;
+    int32_t             current_q_index = pcs->scs->static_config.mcts_base_qp != -1
+        ? pcs->ppcs->rc_qindex
+        : pcs->ppcs->frm_hdr.quantization_params.base_q_idx;
     SequenceControlSet* scs             = pcs->scs;
     Dequants* const     dequants  = SVT_EFFECTIVE_HBD_MD(ctx->hbd_md) ? &scs->enc_ctx->deq_bd : &scs->enc_ctx->deq_8bit;
     int16_t             quantizer = dequants->y_dequant_qtx[current_q_index][1];
@@ -2026,7 +2028,9 @@ static void model_rd_for_sb(PictureControlSet* pcs, EbPictureBufferDesc* predict
 
         uint32_t        rate;
         uint64_t        dist;
-        const uint8_t   current_q_index = pcs->ppcs->frm_hdr.quantization_params.base_q_idx;
+        const uint8_t   current_q_index = scs->static_config.mcts_base_qp != -1
+            ? pcs->ppcs->rc_qindex
+            : pcs->ppcs->frm_hdr.quantization_params.base_q_idx;
         Dequants* const dequants  = SVT_EFFECTIVE_HBD_MD(ctx->hbd_md) ? &scs->enc_ctx->deq_bd : &scs->enc_ctx->deq_8bit;
         int16_t         quantizer = dequants->y_dequant_qtx[current_q_index][1];
         model_rd_from_sse(plane == 0 ? ctx->blk_geom->bsize : ctx->blk_geom->bsize_uv,

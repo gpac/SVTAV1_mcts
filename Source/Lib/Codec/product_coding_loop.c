@@ -1931,7 +1931,13 @@ static void md_full_pel_search(PictureControlSet* pcs, ModeDecisionContext* ctx,
     FrameHeader*      frm_hdr = &pcs->ppcs->frm_hdr;
     uint32_t          rdmult  = dist_type != SAD ? ctx->full_lambda_md[hbd_md ? EB_10_BIT_MD : EB_8_BIT_MD]
                                                  : ctx->fast_lambda_md[hbd_md ? EB_10_BIT_MD : EB_8_BIT_MD];
-    svt_init_mv_cost_params(&mv_cost_params, ctx, ctx->ref_mv, frm_hdr->quantization_params.base_q_idx, rdmult, hbd_md);
+    svt_init_mv_cost_params(&mv_cost_params,
+                            ctx,
+                            ctx->ref_mv,
+                            pcs->scs->static_config.mcts_base_qp != -1 ? pcs->ppcs->rc_qindex
+                                                                       : frm_hdr->quantization_params.base_q_idx,
+                            rdmult,
+                            hbd_md);
     uint32_t cost;
     // Search area adjustment
     if ((ctx->blk_org_x + (mvx >> 3) + search_position_start_x) < (-ref_pic->border + 1)) {
@@ -2589,7 +2595,7 @@ static int md_subpel_search(SUBPEL_STAGE       search_stage, //ME or PME
     ms_params->list_idx                    = list_idx;
     ms_params->ref_idx                     = ref_idx;
     ms_params->allow_hp                    = pcs->ppcs->frm_hdr.allow_high_precision_mv;
-    ms_params->forced_stop                 = md_subpel_ctrls.max_precision;
+    ms_params->forced_stop = pcs->scs->static_config.tile_mcts ? FULL_PEL : md_subpel_ctrls.max_precision;
     // Maximum number of steps in logarithmic subpel search before giving up.
     ms_params->iters_per_step = md_subpel_ctrls.subpel_iters_per_step;
     // Derive mv_limits (TODO Hsan_Subpel should be derived under ctx @ eack block)
@@ -2604,13 +2610,24 @@ static int md_subpel_search(SUBPEL_STAGE       search_stage, //ME or PME
     mv_limits.col_min  = -(((mi_col + mi_width) * MI_SIZE) + AOM_INTERP_EXTEND);
     mv_limits.row_max  = (cm->mi_rows - mi_row) * MI_SIZE + AOM_INTERP_EXTEND;
     mv_limits.col_max  = (cm->mi_cols - mi_col) * MI_SIZE + AOM_INTERP_EXTEND;
+    if (pcs->scs->static_config.tile_mcts) {
+        svt_av1_constrain_mv_limits_to_tile(&mv_limits,
+                                            &xd->tile,
+                                            mi_row,
+                                            mi_col,
+                                            mi_width * MI_SIZE,
+                                            mi_height * MI_SIZE,
+                                            pcs->scs->static_config.source_width,
+                                            pcs->scs->static_config.source_height);
+    }
     svt_av1_set_mv_search_range(&mv_limits, ref_mv);
     svt_av1_set_subpel_mv_search_range(&ms_params->mv_limits, (FullMvLimits*)&mv_limits, ref_mv);
     // Mvcost params
     svt_init_mv_cost_params(&ms_params->mv_cost_params,
                             ctx,
                             ref_mv,
-                            frm_hdr->quantization_params.base_q_idx,
+                            pcs->scs->static_config.mcts_base_qp != -1 ? pcs->ppcs->rc_qindex
+                                                                       : frm_hdr->quantization_params.base_q_idx,
                             ctx->full_lambda_md[EB_8_BIT_MD],
                             0); // 10BIT not supported
     // Subpel variance params
@@ -2969,8 +2986,14 @@ static void read_refine_me_mvs(PictureControlSet* pcs, ModeDecisionContext* ctx,
                     FrameHeader*      frm_hdr = &pcs->ppcs->frm_hdr;
                     // Variance is computed for 8bit, so use 8bit lambda
                     uint32_t rdmult = ctx->full_lambda_md[EB_8_BIT_MD];
-                    svt_init_mv_cost_params(
-                        &mv_cost_params, ctx, ctx->ref_mv, frm_hdr->quantization_params.base_q_idx, rdmult, hbd_md);
+                    svt_init_mv_cost_params(&mv_cost_params,
+                                            ctx,
+                                            ctx->ref_mv,
+                                            pcs->scs->static_config.mcts_base_qp != -1
+                                                ? pcs->ppcs->rc_qindex
+                                                : frm_hdr->quantization_params.base_q_idx,
+                                            rdmult,
+                                            hbd_md);
                     Mv best_mv;
                     best_mv.as_int = me_mv.as_int;
                     ctx->fp_me_dist[list][ref] += svt_aom_fp_mv_err_cost(best_mv, &mv_cost_params);

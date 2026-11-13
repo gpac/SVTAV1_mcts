@@ -1020,6 +1020,8 @@ EbErrorType svt_av1_set_default_params(EbSvtAv1EncConfiguration* config_ptr) {
     config_ptr->stat_report              = 0;
     config_ptr->tile_rows                = DEFAULT;
     config_ptr->tile_columns             = DEFAULT;
+    config_ptr->tile_mcts                = false;
+    config_ptr->mcts_base_qp             = -1;
     config_ptr->qp                       = DEFAULT_QP;
     config_ptr->use_qp_file              = false;
     config_ptr->use_fixed_qindex_offsets = 0;
@@ -2510,6 +2512,7 @@ EB_API EbErrorType svt_av1_enc_parse_parameter(EbSvtAv1EncConfiguration* config_
         int8_t*     out;
     } int8_opts[] = {
         {"preset", &config_struct->enc_mode},
+        {"mcts-base-qp", &config_struct->mcts_base_qp},
         {"sharpness", &config_struct->sharpness},
         {"startup-qp-offset", &config_struct->startup_qp_offset},
     };
@@ -2537,6 +2540,7 @@ EB_API EbErrorType svt_av1_enc_parse_parameter(EbSvtAv1EncConfiguration* config_
         bool*       out;
     } bool_opts[] = {
         {"use-q-file", &config_struct->use_qp_file},
+        {"mcts", &config_struct->tile_mcts},
         {"enable-overlays", &config_struct->enable_overlays},
         {"enable-force-key-frames", &config_struct->force_key_frames},
 #if CONFIG_ENABLE_QUANT_MATRIX

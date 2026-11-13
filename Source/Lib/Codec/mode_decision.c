@@ -2140,8 +2140,21 @@ static void single_motion_search(PictureControlSet* pcs, ModeDecisionContext* ct
     x->mv_limits.col_min = -(((mi_col + mi_width) * MI_SIZE) + AOM_INTERP_EXTEND);
     x->mv_limits.row_max = (cm->mi_rows - mi_row) * MI_SIZE + AOM_INTERP_EXTEND;
     x->mv_limits.col_max = (cm->mi_cols - mi_col) * MI_SIZE + AOM_INTERP_EXTEND;
+    if (pcs->scs->static_config.tile_mcts) {
+        svt_av1_constrain_mv_limits_to_tile(&x->mv_limits,
+                                            &x->xd->tile,
+                                            mi_row,
+                                            mi_col,
+                                            mi_width * MI_SIZE,
+                                            mi_height * MI_SIZE,
+                                            pcs->scs->static_config.source_width,
+                                            pcs->scs->static_config.source_height);
+    }
     //set search paramters
-    x->sadperbit16 = svt_aom_get_sad_per_bit(frm_hdr->quantization_params.base_q_idx, 0);
+    x->sadperbit16 = svt_aom_get_sad_per_bit(pcs->scs->static_config.mcts_base_qp != -1
+                                                 ? pcs->ppcs->rc_qindex
+                                                 : frm_hdr->quantization_params.base_q_idx,
+                                             0);
     x->errorperbit = full_lambda >> RD_EPB_SHIFT;
     x->errorperbit += (x->errorperbit == 0);
     if (do_full_refine) {
@@ -3042,7 +3055,10 @@ static void intra_bc_search(PictureControlSet* pcs, ModeDecisionContext* ctx, co
     x->mv_limits.row_max = (cm->mi_rows - mi_row) * MI_SIZE + AOM_INTERP_EXTEND;
     x->mv_limits.col_max = (cm->mi_cols - mi_col) * MI_SIZE + AOM_INTERP_EXTEND;
     //set search paramters
-    x->sadperbit16 = svt_aom_get_sad_per_bit(frm_hdr->quantization_params.base_q_idx, 0);
+    x->sadperbit16 = svt_aom_get_sad_per_bit(scs->static_config.mcts_base_qp != -1
+                                                 ? pcs->ppcs->rc_qindex
+                                                 : frm_hdr->quantization_params.base_q_idx,
+                                             0);
     x->errorperbit = full_lambda >> RD_EPB_SHIFT;
     x->errorperbit += (x->errorperbit == 0);
     //temp buffer for hash me
@@ -3628,6 +3644,52 @@ static uint32_t reject_candidate_sframe(PictureControlSet* pcs, ModeDecisionCont
     return cand_total_cnt;
 }
 
+static uint32_t reject_candidate_tile_mcts(PictureControlSet* pcs, ModeDecisionContext* ctx, uint32_t count) {
+    if (!pcs->scs->static_config.tile_mcts) {
+        return count;
+    }
+    const MacroBlockD* xd     = ctx->blk_ptr->av1xd;
+    MvLimits           limits = {INT_MIN, INT_MAX, INT_MIN, INT_MAX};
+    // Include the shared 8x8 chroma footprint of sub-8x8 luma blocks.
+    const int mi_col = ctx->blk_geom->bwidth < 8 ? xd->mi_col & ~1 : xd->mi_col;
+    const int mi_row = ctx->blk_geom->bheight < 8 ? xd->mi_row & ~1 : xd->mi_row;
+    svt_av1_constrain_mv_limits_to_tile(&limits,
+                                        &xd->tile,
+                                        mi_row,
+                                        mi_col,
+                                        AOMMAX(8, ctx->blk_geom->bwidth),
+                                        AOMMAX(8, ctx->blk_geom->bheight),
+                                        pcs->scs->static_config.source_width,
+                                        pcs->scs->static_config.source_height);
+    uint32_t kept = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        const ModeDecisionCandidate* cand  = &ctx->fast_cand_array[i];
+        bool                         valid = true;
+        if (is_inter_block(&cand->block_mi)) {
+            for (int ref = 0; ref < 1 + has_second_ref(&cand->block_mi); ++ref) {
+                const Mv mv = cand->block_mi.mv[ref];
+                // Even luma displacements keep chroma full-pel too.
+                if ((mv.x & 15) || (mv.y & 15) || mv_check_bounds(&limits, mv)) {
+                    valid = false;
+                    break;
+                }
+            }
+        }
+        if (valid) {
+            ctx->fast_cand_array[kept++] = *cand;
+        }
+    }
+    if (kept == 0) {
+        if (pcs->slice_type == I_SLICE) {
+            inject_intra_candidates_pd0(pcs, ctx, &kept);
+        } else {
+            inject_zz_backup_candidate(pcs, ctx, &kept);
+        }
+    }
+    assert(kept > 0);
+    return kept;
+}
+
 EbErrorType generate_md_stage_0_cand_pd0(ModeDecisionContext* ctx, uint32_t* candidate_total_count_ptr,
                                          PictureControlSet* pcs) {
     const SliceType slice_type     = pcs->slice_type;
@@ -3652,6 +3714,7 @@ EbErrorType generate_md_stage_0_cand_pd0(ModeDecisionContext* ctx, uint32_t* can
         cand_total_cnt = reject_candidate_sframe(pcs, ctx, cand_total_cnt);
     }
 
+    cand_total_cnt = reject_candidate_tile_mcts(pcs, ctx, cand_total_cnt);
     *candidate_total_count_ptr = cand_total_cnt;
 
     return EB_ErrorNone;
@@ -3695,6 +3758,7 @@ void generate_md_stage_0_cand_light_pd1(ModeDecisionContext* ctx, uint32_t* cand
         cand_total_cnt = reject_candidate_sframe(pcs, ctx, cand_total_cnt);
     }
 
+    cand_total_cnt = reject_candidate_tile_mcts(pcs, ctx, cand_total_cnt);
     *candidate_total_count_ptr = cand_total_cnt;
 }
 
@@ -3775,6 +3839,7 @@ EbErrorType generate_md_stage_0_cand(PictureControlSet* pcs, ModeDecisionContext
         cand_total_cnt = reject_candidate_sframe(pcs, ctx, cand_total_cnt);
     }
 
+    cand_total_cnt = reject_candidate_tile_mcts(pcs, ctx, cand_total_cnt);
     *candidate_total_count_ptr = cand_total_cnt;
 
     memset(ctx->md_stage_0_count, 0, CAND_CLASS_TOTAL * sizeof(uint32_t));
