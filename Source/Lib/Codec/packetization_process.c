@@ -128,6 +128,7 @@ static void push_undisplayed_frame(EncodeContext* enc_ctx, EbObjectWrapper* wrap
         // drop it as the alt ref path does, rather than leak the buffer. leaking drains the output
         // pool and stalls packetization for good, which hides the bug being reported here
         EB_FREE(((EbBufferHeaderType*)wrapper->object_ptr)->p_buffer);
+        svt_av1_free_private_data_list((EbBufferHeaderType*)wrapper->object_ptr);
         svt_release_object(wrapper);
         return;
     }
@@ -290,7 +291,6 @@ static void collect_frames_info(PacketizationContext* context_ptr, const EncodeC
             queue_entry_ptr->start_time_u_seconds,
             finish_time_seconds,
             finish_time_u_seconds);
-        output_stream_ptr->p_app_private = (EbBufferHeaderType*)NULL;
         if (queue_entry_ptr->is_alt_ref) {
             output_stream_ptr->flags |= (uint32_t)EB_BUFFERFLAG_IS_ALT_REF;
         }
@@ -335,6 +335,7 @@ static EbErrorType encode_tu(EncodeContext* enc_ctx, int frames, uint32_t total_
             // the overlay frame carries its own copy of the metadata
             svt_metadata_array_free(&src_stream_ptr->metadata);
             EB_FREE(src_stream_ptr->p_buffer);
+            svt_av1_free_private_data_list(src_stream_ptr);
             svt_release_object(wrapper);
         }
     }
@@ -759,7 +760,12 @@ EbErrorType svt_aom_packetization_kernel_iter(void* context) {
     } else {
         output_stream_ptr->pic_type = EB_AV1_NON_REF_PICTURE;
     }
-    output_stream_ptr->p_app_private        = pcs->ppcs->input_ptr->p_app_private;
+    output_stream_ptr->p_app_private = NULL;
+    if (scs->static_config.tile_mcts && scs->static_config.mcts_base_qp != -1 &&
+        scs->static_config.rate_control_mode == SVT_AV1_RC_MODE_VBR) {
+        output_stream_ptr->p_app_private = pcs->ppcs->input_ptr->p_app_private;
+        pcs->ppcs->input_ptr->p_app_private = NULL;
+    }
     output_stream_ptr->temporal_layer_index = pcs->ppcs->temporal_layer_index;
     output_stream_ptr->qp                   = pcs->ppcs->picture_qp;
     output_stream_ptr->avg_qp               = pcs->ppcs->avg_qp;

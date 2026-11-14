@@ -140,7 +140,7 @@ static void get_ref_hp_percentage(PictureControlSet* pcs, int16_t* hp_area) {
     }
 }
 
-static void free_private_data_list(EbBufferHeaderType* p) {
+void svt_av1_free_private_data_list(EbBufferHeaderType* p) {
     EbPrivDataNode* p_node = (EbPrivDataNode*)p->p_app_private;
     while (p_node) {
         if (p_node->node_type != PRIVATE_DATA && p_node->node_type != ROI_MAP_EVENT) {
@@ -810,7 +810,7 @@ static void rc_process_packetization_feedback(PictureParentControlSet* ppcs,
     }
 
     // free private data list before release input picture buffer
-    free_private_data_list((EbBufferHeaderType*)ppcs->input_pic_wrapper->object_ptr);
+    svt_av1_free_private_data_list((EbBufferHeaderType*)ppcs->input_pic_wrapper->object_ptr);
 
     svt_release_object(ppcs->input_pic_wrapper);
     svt_release_object(ppcs->scs_wrapper);

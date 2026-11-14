@@ -98,6 +98,7 @@ class RefDecoder {
 
     typedef struct StreamInfo {
         std::vector<int> frame_type_list;
+        std::vector<int> show_frame_list;
         uint32_t profile;
         uint32_t tier;
         int monochrome;  // Monochorme video

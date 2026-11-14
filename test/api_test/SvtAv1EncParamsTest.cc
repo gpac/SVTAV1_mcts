@@ -399,7 +399,7 @@ TEST_F(TileMctsValidationTest, RejectsInvalidMultiTileTargetBitrates) {
     }
 }
 
-TEST_F(TileMctsValidationTest, FixedBaseRequiresLossyMctsCbr) {
+TEST_F(TileMctsValidationTest, FixedBaseRequiresLossyMctsAndBitrate) {
     ctxt_.enc_params.mcts_base_qp = 35;
     EXPECT_EQ(EB_ErrorBadParameter,
               svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
@@ -421,10 +421,43 @@ TEST_F(TileMctsValidationTest, FixedBaseRequiresLossyMctsCbr) {
               svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
     ctxt_.enc_params.mcts_base_qp = 35;
     ctxt_.enc_params.rate_control_mode = SVT_AV1_RC_MODE_VBR;
+    EXPECT_EQ(EB_ErrorNone,
+              svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+    ctxt_.enc_params.target_bit_rate = 0;
     EXPECT_EQ(EB_ErrorBadParameter,
               svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+    ctxt_.enc_params.target_bit_rate = 2000513;
+    EXPECT_EQ(EB_ErrorBadParameter,
+              svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+    ctxt_.enc_params.target_bit_rate = 300000;
     ctxt_.enc_params.rate_control_mode = SVT_AV1_RC_MODE_CBR;
     ctxt_.enc_params.lossless = true;
+    EXPECT_EQ(EB_ErrorBadParameter,
+              svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+}
+
+TEST_F(TileMctsValidationTest, LowDelayVbrStillRejectedWithoutMcts) {
+    ctxt_.enc_params.tile_mcts = false;
+    ctxt_.enc_params.pred_structure = LOW_DELAY;
+    ctxt_.enc_params.rate_control_mode = SVT_AV1_RC_MODE_VBR;
+    ctxt_.enc_params.target_bit_rate = 300000;
+    EXPECT_EQ(EB_ErrorBadParameter,
+              svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+}
+
+TEST_F(TileMctsValidationTest, VbrAcceptsExplicitHierarchiesAndRejectsInvalid) {
+    ctxt_.enc_params.tile_mcts = true;
+    ctxt_.enc_params.mcts_base_qp = 35;
+    ctxt_.enc_params.rate_control_mode = SVT_AV1_RC_MODE_VBR;
+    ctxt_.enc_params.target_bit_rate = 300000;
+    for (uint32_t level = 0; level <= 5; ++level) {
+        ctxt_.enc_params.hierarchical_levels = level;
+        EXPECT_EQ(EB_ErrorNone,
+                  svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params))
+            << "hierarchy " << level;
+        EXPECT_EQ(level, ctxt_.enc_params.hierarchical_levels);
+    }
+    ctxt_.enc_params.hierarchical_levels = 6;
     EXPECT_EQ(EB_ErrorBadParameter,
               svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
 }

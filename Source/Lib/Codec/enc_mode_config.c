@@ -9280,6 +9280,8 @@ void svt_aom_sig_deriv_mode_decision_config_default(SequenceControlSet* scs, Pic
             }
         }
     }
+    if (scs->static_config.tile_mcts)
+        pcs->interpolation_search_level = 0;
     frm_hdr->interpolation_filter = pcs->interpolation_search_level ? SWITCHABLE : EIGHTTAP_REGULAR;
 
     pcs->chroma_level = svt_aom_get_chroma_level_default(enc_mode, is_islice);

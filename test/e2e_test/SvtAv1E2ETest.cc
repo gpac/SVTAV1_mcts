@@ -436,6 +436,12 @@ class TileIndependenceTest : public SvtAv1E2ETestFramework {
                           enc_setting.name == "TileMctsFixedBaseMulti" ||
                           enc_setting.name == "TileMctsFixedBaseMin" ||
                           enc_setting.name == "TileMctsFixedBaseMax" ||
+                          enc_setting.name == "TileMctsFixedBaseVbr" ||
+                          enc_setting.name == "TileMctsFixedBaseVbrMulti" ||
+                          enc_setting.name == "TileMctsFixedBaseVbrMultiLevel0" ||
+                          enc_setting.name == "TileMctsFixedBaseVbrMultiLevel5" ||
+                          enc_setting.name == "TileMctsFixedBaseVbrMin" ||
+                          enc_setting.name == "TileMctsFixedBaseVbrMax" ||
                           enc_setting.name == "TileMctsSingleBitrate";
         SvtAv1E2ETestFramework::config_test();
     }
@@ -444,8 +450,10 @@ class TileIndependenceTest : public SvtAv1E2ETestFramework {
         if (enable_analyzer) {
             const auto *info = refer_dec_->get_stream_info();
             if (enc_setting.name.find("TileMctsFixedBase") == 0) {
-                const int expected_base = enc_setting.name == "TileMctsFixedBaseMin" ? 4 :
-                    enc_setting.name == "TileMctsFixedBaseMax" ? 255 : 140;
+                const int expected_base = enc_setting.name == "TileMctsFixedBaseMin" ||
+                        enc_setting.name == "TileMctsFixedBaseVbrMin" ? 4 :
+                    enc_setting.name == "TileMctsFixedBaseMax" ||
+                        enc_setting.name == "TileMctsFixedBaseVbrMax" ? 255 : 140;
                 ASSERT_EQ(48u, info->base_qindex_list.size());
                 for (size_t i = 0; i < info->base_qindex_list.size(); ++i) {
                     ASSERT_EQ(expected_base, info->base_qindex_list[i]);
@@ -519,6 +527,58 @@ static const std::vector<EncTestSetting> tile_settings = {
       {"TargetBitRate", "300"},
       {"LevelOfParallelism", "1"}},
      tile_mcts_test_vectors},
+    {"TileMctsFixedBaseVbr",
+     {{"TileCol", "0"},
+      {"TileRow", "0"},
+      {"TileMcts", "1"},
+      {"MctsBaseQp", "35"},
+      {"RateControlMode", "1"},
+      {"TargetBitRate", "300"},
+      {"LevelOfParallelism", "1"}},
+     tile_mcts_test_vectors},
+    {"TileMctsFixedBaseVbrMulti",
+     {{"TileCol", "1"},
+      {"TileRow", "1"},
+      {"TileMcts", "1"},
+      {"MctsBaseQp", "35"},
+      {"RateControlMode", "1"},
+      {"TargetBitRate", "300"},
+      {"LevelOfParallelism", "1"}},
+     tile_mcts_test_vectors},
+    {"TileMctsFixedBaseVbrMultiLevel0",
+     {{"TileCol", "1"},
+      {"TileRow", "1"},
+      {"TileMcts", "1"},
+      {"MctsBaseQp", "35"},
+      {"RateControlMode", "1"},
+      {"TargetBitRate", "300"},
+      {"HierarchicalLevels", "0"},
+      {"LevelOfParallelism", "1"}},
+     tile_mcts_test_vectors},
+    {"TileMctsFixedBaseVbrMultiLevel5",
+     {{"TileCol", "1"},
+      {"TileRow", "1"},
+      {"TileMcts", "1"},
+      {"MctsBaseQp", "35"},
+      {"RateControlMode", "1"},
+      {"TargetBitRate", "300"},
+      {"HierarchicalLevels", "5"},
+      {"LevelOfParallelism", "1"}},
+     tile_mcts_test_vectors},
+    {"TileMctsFixedBaseVbrMin",
+     {{"TileMcts", "1"},
+      {"MctsBaseQp", "1"},
+      {"RateControlMode", "1"},
+      {"TargetBitRate", "80"},
+      {"LevelOfParallelism", "1"}},
+     tile_mcts_test_vectors},
+    {"TileMctsFixedBaseVbrMax",
+     {{"TileMcts", "1"},
+      {"MctsBaseQp", "63"},
+      {"RateControlMode", "1"},
+      {"TargetBitRate", "1000"},
+      {"LevelOfParallelism", "1"}},
+     tile_mcts_test_vectors},
     {"TileMctsFixedBaseMin",
      {{"TileCol", "0"},
       {"TileRow", "0"},
@@ -569,6 +629,82 @@ static const std::vector<EncTestSetting> tile_settings = {
 
 INSTANTIATE_TEST_SUITE_P(TILETEST, TileIndependenceTest,
                          ::testing::ValuesIn(tile_settings),
+                         EncTestSetting::GetSettingName);
+
+class MctsVbrScheduleTest : public SvtAv1E2ETestFramework {
+  protected:
+    void config_test() override {
+        enable_decoder = true;
+        enable_analyzer = true;
+        enable_recon = true;
+        enable_config = true;
+        SvtAv1E2ETestFramework::config_test();
+    }
+
+    void compare_schedules() {
+        config_test();
+        for (auto test_vector : enc_setting.test_vectors) {
+            std::vector<int> frame_types;
+            std::vector<int> show_frames;
+            std::vector<uint8_t> refresh_flags;
+            for (uint32_t bitrate : {40000u, 80000u, 400000u, 1200000u}) {
+                enc_config_->config.target_bit_rate = bitrate;
+                init_test(test_vector);
+                ASSERT_NO_FATAL_FAILURE(run_encode_process());
+                const auto *info = refer_dec_->get_stream_info();
+                ASSERT_FALSE(info->frame_type_list.empty());
+                ASSERT_FALSE(info->refresh_frame_flags_list.empty());
+                const auto level = enc_config_->config.hierarchical_levels;
+                ASSERT_GT(info->show_frame_list.size(), level + 1);
+                EXPECT_EQ(1, info->show_frame_list[0]);
+                for (uint32_t i = 1; i <= level; ++i)
+                    EXPECT_EQ(0, info->show_frame_list[i]);
+                EXPECT_EQ(1, info->show_frame_list[level + 1]);
+                if (frame_types.empty()) {
+                    frame_types = info->frame_type_list;
+                    show_frames = info->show_frame_list;
+                    refresh_flags = info->refresh_frame_flags_list;
+                } else {
+                    EXPECT_EQ(frame_types, info->frame_type_list);
+                    EXPECT_EQ(show_frames, info->show_frame_list);
+                    EXPECT_EQ(refresh_flags, info->refresh_frame_flags_list);
+                }
+                post_process();
+                deinit_test();
+            }
+        }
+    }
+};
+
+TEST_P(MctsVbrScheduleTest, BitrateDoesNotChangeSchedule) {
+    compare_schedules();
+}
+
+static const std::vector<TestVideoVector> mcts_vbr_schedule_vectors = {
+    std::make_tuple("schedule_8bit", DUMMY_SOURCE, IMG_FMT_420, 256, 256, 8,
+                    false, 0, 113),
+    std::make_tuple("schedule_10bit", DUMMY_SOURCE, IMG_FMT_420, 256, 256, 10,
+                    false, 0, 113)};
+
+static std::vector<EncTestSetting> mcts_vbr_schedule_settings() {
+    std::vector<EncTestSetting> settings;
+    for (int level = 0; level <= 5; ++level) {
+        settings.push_back(
+            {"MctsVbrLevel" + std::to_string(level),
+             {{"TileMcts", "1"},
+              {"MctsBaseQp", "35"},
+              {"RateControlMode", "1"},
+              {"TargetBitRate", "80"},
+              {"IntraPeriod", "48"},
+              {"HierarchicalLevels", std::to_string(level)},
+              {"LevelOfParallelism", "1"}},
+             mcts_vbr_schedule_vectors});
+    }
+    return settings;
+}
+
+INSTANTIATE_TEST_SUITE_P(MCTS, MctsVbrScheduleTest,
+                         ::testing::ValuesIn(mcts_vbr_schedule_settings()),
                          EncTestSetting::GetSettingName);
 
 class NarrowTileSchedulingTest : public SvtAv1E2ETestFramework {

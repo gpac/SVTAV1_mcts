@@ -1093,7 +1093,9 @@ void svt_av1_twopass_postencode_update_gop_const(PictureParentControlSet* ppcs) 
         int pyramid_level = ppcs->layer_depth;
         int i;
         for (i = pyramid_level; i <= MAX_ARF_LAYERS; ++i) {
-            rc->active_best_quality[i] = ppcs->frm_hdr.quantization_params.base_q_idx;
+            rc->active_best_quality[i] = ppcs->scs->static_config.mcts_base_qp != -1
+                ? ppcs->rc_qindex
+                : ppcs->frm_hdr.quantization_params.base_q_idx;
         }
     }
 
@@ -1204,7 +1206,9 @@ void svt_av1_twopass_postencode_update(PictureParentControlSet* ppcs) {
         int pyramid_level = ppcs->layer_depth;
         int i;
         for (i = pyramid_level; i <= MAX_ARF_LAYERS; ++i) {
-            rc->active_best_quality[i] = ppcs->frm_hdr.quantization_params.base_q_idx;
+            rc->active_best_quality[i] = ppcs->scs->static_config.mcts_base_qp != -1
+                ? ppcs->rc_qindex
+                : ppcs->frm_hdr.quantization_params.base_q_idx;
         }
     }
 

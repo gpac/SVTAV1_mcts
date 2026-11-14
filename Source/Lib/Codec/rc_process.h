@@ -19,6 +19,8 @@
 #include "pcs.h"
 #include "object.h"
 
+void svt_av1_free_private_data_list(EbBufferHeaderType* buffer);
+
 #define MINQ_ADJ_LIMIT 48
 #define HIGH_UNDERSHOOT_RATIO 2
 

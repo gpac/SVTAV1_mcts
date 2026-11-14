@@ -3660,6 +3660,9 @@ static void set_mrp_ctrl(const SequenceControlSet* scs, MrpCtrls* mrp_ctrl, EncM
             }
         }
     }
+    if (scs->static_config.tile_mcts && scs->static_config.mcts_base_qp != -1 &&
+        scs->static_config.rate_control_mode == SVT_AV1_RC_MODE_VBR)
+        mrp_level = 11;
     set_mrp_ctrl_with_level(scs, mrp_ctrl, mrp_level);
 }
 
@@ -4038,6 +4041,9 @@ static void set_param_based_on_input(SequenceControlSet* scs) {
         } else {
             scs->static_config.qp = 30;
         }
+        if (scs->static_config.tile_mcts && scs->static_config.mcts_base_qp != -1 &&
+            scs->static_config.rate_control_mode == SVT_AV1_RC_MODE_VBR)
+            scs->static_config.qp = scs->static_config.mcts_base_qp;
     }
     svt_aom_derive_input_resolution(&scs->input_resolution, scs->max_input_luma_width * scs->max_input_luma_height);
 
@@ -4407,6 +4413,7 @@ static void set_still_image_fast_decode(SequenceControlSet* scs, const EbSvtAv1E
 
 static EbErrorType apply_tile_mcts_profile(EbSvtAv1EncConfiguration* config) {
     const bool fixed_base = config->mcts_base_qp != -1;
+    const bool use_vbr    = fixed_base && config->rate_control_mode == SVT_AV1_RC_MODE_VBR;
     if (fixed_base && (!config->tile_mcts || config->mcts_base_qp < 1 || config->mcts_base_qp > 63 ||
                        config->lossless || config->max_qp_allowed == 0)) {
         SVT_ERROR("--mcts-base-qp requires --mcts, a QP in [1,63], and lossy encoding.\n");
@@ -4416,10 +4423,13 @@ static EbErrorType apply_tile_mcts_profile(EbSvtAv1EncConfiguration* config) {
         return EB_ErrorNone;
     }
 
-    if (fixed_base && (config->rate_control_mode == SVT_AV1_RC_MODE_VBR ||
-                       (config->rate_control_mode != SVT_AV1_RC_MODE_CBR &&
-                        config->target_bit_rate == DEFAULT_TBR))) {
-        SVT_ERROR("--mcts-base-qp requires CBR or an explicit target bitrate; VBR is not supported.\n");
+    if (use_vbr && (config->target_bit_rate == DEFAULT_TBR || config->target_bit_rate == 0)) {
+        SVT_ERROR("--mcts random-access VBR requires a nonzero target other than the default sentinel 2000513 bps.\n");
+        return EB_ErrorBadParameter;
+    }
+    if (fixed_base && !use_vbr && config->rate_control_mode != SVT_AV1_RC_MODE_CBR &&
+        config->target_bit_rate == DEFAULT_TBR) {
+        SVT_ERROR("--mcts-base-qp requires CBR or an explicit target bitrate.\n");
         return EB_ErrorBadParameter;
     }
     if (config->pass != ENC_SINGLE_PASS || config->sframe_dist != 0 || config->sframe_posi.sframe_posis ||
@@ -4429,7 +4439,7 @@ static EbErrorType apply_tile_mcts_profile(EbSvtAv1EncConfiguration* config) {
     }
 
     const bool multiple_tiles = config->tile_columns > 0 || config->tile_rows > 0;
-    const bool use_cbr        = (multiple_tiles || fixed_base) &&
+    const bool use_cbr        = !use_vbr && (multiple_tiles || fixed_base) &&
         (config->rate_control_mode == SVT_AV1_RC_MODE_VBR || config->rate_control_mode == SVT_AV1_RC_MODE_CBR ||
          (config->rate_control_mode == SVT_AV1_RC_MODE_CQP_OR_CRF && config->target_bit_rate != DEFAULT_TBR));
 
@@ -4441,29 +4451,34 @@ static EbErrorType apply_tile_mcts_profile(EbSvtAv1EncConfiguration* config) {
     if (use_cbr && config->rate_control_mode != SVT_AV1_RC_MODE_CBR) {
         SVT_WARN("--mcts uses low-delay CBR for the requested target bitrate.\n");
     }
-    if (!use_cbr && (config->target_bit_rate != DEFAULT_TBR || config->max_bit_rate != 0)) {
+    if (!use_cbr && !use_vbr && (config->target_bit_rate != DEFAULT_TBR || config->max_bit_rate != 0)) {
         SVT_WARN("--mcts uses CQP; target and maximum bitrate settings are ignored.\n");
-    } else if (use_cbr && config->max_bit_rate != 0) {
-        SVT_WARN("--mcts CBR ignores the maximum bitrate setting; CBR uses the target bitrate and buffer.\n");
+    } else if ((use_cbr || use_vbr) && config->max_bit_rate != 0) {
+        SVT_WARN("--mcts ignores the maximum bitrate setting; rate control uses the target bitrate.\n");
     }
-    if (use_cbr && (config->gop_constraint_rc || config->startup_qp_offset)) {
-        SVT_WARN("--mcts CBR disables GOP-constrained VBR and the startup QP offset.\n");
+    if ((use_cbr || use_vbr) && (config->gop_constraint_rc || config->startup_qp_offset)) {
+        SVT_WARN("--mcts disables GOP-constrained VBR and the startup QP offset.\n");
     }
 
     SVT_WARN(
-        "--mcts applies a restricted profile: %s, low-delay GOP with closed key frames and without "
+        "--mcts applies a restricted profile: %s, %s GOP with closed key frames and without "
         "scene-change detection/dynamic GOP/temporal filtering/overlays, deblocking/CDEF/restoration disabled, "
         "MFMV/screen-content tools/scaling/film grain/quantization matrices disabled, full-pel motion search, and "
         "global/warped motion disabled.\n",
-        fixed_base ? "CBR with fixed frame QP and superblock delta-Q"
-                   : use_cbr ? "CBR with adaptive quantization" : "CQP with QP scaling and AQ disabled");
+        use_vbr ? "VBR with fixed frame QP and superblock delta-Q"
+                : fixed_base ? "CBR with fixed frame QP and superblock delta-Q"
+                             : use_cbr ? "CBR with adaptive quantization" : "CQP with QP scaling and AQ disabled",
+        use_vbr ? "random-access" : "low-delay");
 
-    config->pred_structure      = LOW_DELAY;
-    config->hierarchical_levels = use_cbr ? 2 : 3;
+    config->pred_structure = use_vbr ? RANDOM_ACCESS : LOW_DELAY;
+    if (!use_vbr)
+        config->hierarchical_levels = use_cbr ? 2 : 3;
+    else if (config->hierarchical_levels == HIERARCHICAL_LEVELS_AUTO)
+        config->hierarchical_levels = 3;
     config->intra_refresh_type  = SVT_AV1_KF_REFRESH;
     config->rtc                 = false;
-    if (use_cbr) {
-        config->rate_control_mode = SVT_AV1_RC_MODE_CBR;
+    if (use_cbr || use_vbr) {
+        config->rate_control_mode = use_vbr ? SVT_AV1_RC_MODE_VBR : SVT_AV1_RC_MODE_CBR;
         config->aq_mode           = 2;
         config->gop_constraint_rc = false;
         config->startup_qp_offset = 0;
@@ -4475,7 +4490,7 @@ static EbErrorType apply_tile_mcts_profile(EbSvtAv1EncConfiguration* config) {
     config->max_bit_rate                         = 0;
     config->scene_change_detection               = 0;
     config->enable_dg                            = false;
-    config->look_ahead_distance                  = 0;
+    config->look_ahead_distance                  = use_vbr ? (uint32_t)~0 : 0;
     config->enable_tf                            = 0;
     config->enable_tf_key                        = false;
     config->enable_overlays                      = false;
@@ -4513,6 +4528,12 @@ static EbErrorType apply_tile_mcts_profile(EbSvtAv1EncConfiguration* config) {
     config->max_managed_refs                     = 0;
     config->max_hierarchical_levels              = 0;
     config->max_allowed_consecutive_frames_skips = 0;
+    if (use_vbr) {
+        if (config->enc_mode != ENC_M10)
+            SVT_WARN("--mcts random-access VBR uses preset 10 for a common frame-header profile.\n");
+        config->enc_mode    = ENC_M10;
+        config->recode_loop = DISALLOW_RECODE;
+    }
     memset(config->qindex_offsets, 0, sizeof(config->qindex_offsets));
     memset(config->chroma_qindex_offsets, 0, sizeof(config->chroma_qindex_offsets));
 
@@ -5895,9 +5916,25 @@ EB_API EbErrorType svt_av1_enc_send_picture(EbComponentType* svt_enc_component, 
     EbEncHandle*        enc_handle_ptr = (EbEncHandle*)svt_enc_component->p_component_private;
     EbObjectWrapper*    eb_wrapper_ptr;
     EbBufferHeaderType* app_hdr    = p_buffer;
-    enc_handle_ptr->frame_received = true;
-
     SequenceControlSet* scs = enc_handle_ptr->scs_instance->scs;
+    if (scs->static_config.tile_mcts) {
+        if (!(p_buffer->flags & EB_BUFFERFLAG_EOS) && p_buffer->pic_type == EB_AV1_KEY_PICTURE &&
+            enc_handle_ptr->frame_received) {
+            SVT_ERROR("--mcts does not support forced keyframes after the first frame.\n");
+            return EB_ErrorBadParameter;
+        }
+        for (const EbPrivDataNode* node = (const EbPrivDataNode*)p_buffer->p_app_private; node; node = node->next) {
+            if (node->node_type == RES_CHANGE_EVENT) {
+                SVT_ERROR("--mcts does not support runtime resolution changes.\n");
+                return EB_ErrorBadParameter;
+            }
+            if (scs->static_config.mcts_base_qp != -1 &&
+                scs->static_config.rate_control_mode == SVT_AV1_RC_MODE_VBR && node->node_type != PRIVATE_DATA) {
+                SVT_ERROR("--mcts random-access VBR does not support runtime events.\n");
+                return EB_ErrorBadParameter;
+            }
+        }
+    }
     if (scs->static_config.avif && (p_buffer->flags & EB_BUFFERFLAG_EOS) != EB_BUFFERFLAG_EOS && p_buffer->pts == 3) {
         p_buffer->flags              = EB_BUFFERFLAG_EOS;
         p_buffer->pic_type           = EB_AV1_INVALID_PICTURE;
@@ -6007,6 +6044,7 @@ EB_API EbErrorType svt_av1_enc_send_picture(EbComponentType* svt_enc_component, 
     input_cmd_obj->eb_input_wrapper_ptr = eb_wrapper_ptr;
     input_cmd_obj->y8b_wrapper          = y8b_wrapper;
     input_cmd_obj->skip_frame           = skip_frame;
+    enc_handle_ptr->frame_received      = true;
     // Only now is EOS actually in the pipeline; recording it earlier would make
     // deinit drain for a packet that was never going to be produced.
     enc_handle_ptr->eos_received += p_buffer->flags & EB_BUFFERFLAG_EOS;
@@ -6104,6 +6142,7 @@ EB_API void svt_av1_enc_release_out_buffer(EbBufferHeaderType** p_buffer) {
         if ((*p_buffer)->p_buffer) {
             EB_FREE((*p_buffer)->p_buffer);
         }
+        svt_av1_free_private_data_list(*p_buffer);
         // Release out put buffer back into the pool
         svt_release_object((EbObjectWrapper*)(*p_buffer)->wrapper_ptr);
     }
@@ -6437,6 +6476,7 @@ void svt_output_buffer_header_destroyer(EbPtr p) {
     svt_metadata_array_free(&obj->metadata);
     // a packet never released through svt_av1_enc_release_out_buffer still owns its bitstream
     EB_FREE(obj->p_buffer);
+    svt_av1_free_private_data_list(obj);
     EB_FREE(obj);
 }
 

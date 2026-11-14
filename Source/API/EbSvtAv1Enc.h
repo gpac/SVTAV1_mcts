@@ -1108,7 +1108,8 @@ typedef struct EbSvtAv1EncConfiguration {
      * Default is false. */
     bool tile_mcts;
 
-    /* Fixed frame-header QP for MCTS CBR: -1 disables, 1..63 enables. */
+    /* Fixed frame-header QP for MCTS CBR or random-access VBR: -1 disables, 1..63 enables.
+     * MCTS VBR accepts hierarchical_levels 0..5 (auto selects 3); merged encoders must match. */
     int8_t mcts_base_qp;
 
     // clang-format off
