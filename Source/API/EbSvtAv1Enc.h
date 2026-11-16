@@ -1103,13 +1103,14 @@ typedef struct EbSvtAv1EncConfiguration {
      */
     uint8_t fast_decode_user_opts;
 
-    /* Restrict encoding tools and references so that tiles can be independently decoded.
-     * Also applies to a single tile intended for tile composition.
+    /* Constrain decoder dependencies to each tile, including interpolation footprints.
+     * Preserves the selected coding mode; separately encoded tiles still need compatible
+     * shared headers and reference schedules for composition. Also applies to a single tile.
      * Default is false. */
     bool tile_mcts;
 
-    /* Fixed frame-header QP for MCTS CBR or random-access VBR: -1 disables, 1..63 enables.
-     * MCTS VBR accepts hierarchical_levels 0..5 (auto selects 3); merged encoders must match. */
+    /* Fixed frame-header QP for MCTS VBR/CBR with AQ mode 2: -1 disables, 1..63 enables.
+     * Does not select a preset, prediction structure, or hierarchy. */
     int8_t mcts_base_qp;
 
     // clang-format off

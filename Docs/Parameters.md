@@ -304,72 +304,76 @@ SvtAv1EncApp -i in.y4m -b out.ivf --roi-map-file roi_map.txt
 | **Avif**                         | --avif                     | [0-1]          | 0           | Enable still-picture coding optimizations for improved coding efficiency and reduced memory usage                                                                     |
 
 `--mcts` supports both a single tile (`--tile-columns 0 --tile-rows 0`)
-for later composition and multiple tiles. It applies an effective profile without changing the caller's
-configuration: single-tile encoding and multi-tile encoding without a bitrate target use CQP,
-with QP scaling and AQ disabled. Multi-tile encoding with a target bitrate uses low-delay CBR
-with AQ mode 2, two hierarchical levels, and one frame-level base quantizer. Without
-`--mcts-base-qp`, multi-tile VBR requests are converted to CBR with a warning;
-requesting CBR or VBR without a separate target uses the encoder's default target.
-The bitrate is a target, not a guarantee. For CBR, an API caller can select CBR
-explicitly for a target of 2,000,513 bits/s, the default-target sentinel.
-For independent encoders that will be merged, `--mcts-base-qp` enables CBR
-with the same fixed frame-header QP on every frame, while each encoder chooses
-its effective quantizer according to its own target bitrate. This works with
-one or multiple tiles, and disables cyclic refresh in this mode. Set the same
-nonzero base QP, GOP/keyframe cadence, frame rate, bit depth and compatible
-frame-header settings on all encoders; inputs must be synchronized and tile
-edges superblock-aligned. A common base QP alone does not ensure merge
-compatibility. Lossless is rejected. Set `--rc 2` explicitly for CBR,
-especially with FFmpeg/GPAC, whose bitrate option may otherwise select VBR.
-For example, use `svtav1-params=mcts=1:mcts-base-qp=35:rc=2` with
-the desired bitrate on each encoder. Quantizer limits and content can prevent
-the target bitrate from being reached.
-With an explicit target and `--rc 1`, fixed-base MCTS instead uses a restricted
-random-access VBR profile, for example
-`svtav1-params=mcts=1:mcts-base-qp=35:rc=1`. This profile fixes preset 10
-and the reference policy. It defaults
-to three hierarchical levels, disables recoding, and rejects runtime events.
-`PRIVATE_DATA` nodes are returned in
-the display-frame output's `p_app_private`, not written into the bitstream.
-Their payloads remain caller-owned and must stay valid until the output packet
-is released.
-Set `--hierarchical-levels` to 0-5 to choose another fixed hierarchy; all
-encoders to be merged must use the same value. Its bitrate accuracy may differ
-from normal VBR; low-delay VBR remains unsupported.
-The GPAC FFmpeg encoder should use `fintra=0` to avoid forwarding input keyframes.
-Older GPAC FFmpeg decoder builds may duplicate random-access AV1 frames under
-decoder backpressure; check frame counts when using those builds.
-The default-target sentinel, 2,000,513 bits/s, cannot be used as a VBR target in
-this profile because it is indistinguishable from an unspecified target.
-Each encoder must receive the same number of frames, timestamps and EOS, and
-use matching hierarchy, keyframe cadence, base QP, bit depth and compatible
-sequence and frame headers. `show_existing_frame` is part of the random-access schedule.
-Keep each tile on the same encoded variant until a closed random-access
-boundary; switching variants mid-GOP can cause drift. Mergers must validate
-all shared header and reference fields: matching base QP alone is insufficient.
-GPAC's `av1merge` does not currently reject every reference or frame-header
-mismatch, so its acceptance alone does not establish compatibility.
-The profile disables QP files/offsets, ROI, variance boost and luminance
-QP bias; uses closed key frames, low-delay prediction and lookahead 0 except
-in the random-access VBR profile, and scene-change detection, dynamic GOP, key-frame forcing, TF,
-overlays, and startup mini-GOP disabled. It also disables deblocking, CDEF,
-restoration, MFMV, screen-content tools, intra block copy, super-resolution,
-resize, film grain, quantization matrices, and high-precision/warped/global
-motion, and fixes the interpolation filter to eight-tap regular. Motion references
-are constrained to every edge of the current tile,
-including outer frame edges. Motion vectors use full-pel precision on both luma
-and chroma (even-pixel luma displacements for 4:2:0), avoiding interpolation
-across borders. Unsafe inter candidates are rejected before coding.
-Deblocking is disabled entirely, not only across tile boundaries. All MCTS
-profiles reject forced keyframes after the first frame and runtime resolution
-changes. Key-typed EOS buffers are accepted. Multi-pass, S-frames, and
-frame-resize events are also rejected.
-Without `--mcts-base-qp`, single-tile bitrate targets are ignored; use a fixed QP for
-separately encoded tiles. Maximum bitrate settings are ignored in MCTS bitrate modes.
-If a requested split cannot produce multiple tiles at the selected frame and superblock
-size, a multi-tile CBR request is rejected.
-Separately encoded tiles must still use matching coding parameters, frame
-headers, and timestamps, with superblock-aligned internal borders, for merging.
+for later composition and multiple tiles. It constrains decoder dependencies,
+not the coding profile. The ordinary configuration is validated first; MCTS
+preserves the selected preset, prediction structure, hierarchy, CQP/CRF/VBR/CBR
+mode, bitrate settings, AQ/QP scaling, recoding, tuning, and analysis tools.
+Existing coding-mode restrictions still apply: for example, CBR requires
+`--pred-struct 1`, and low-delay VBR remains unsupported. The caller's
+configuration is not modified.
+
+The additional constraints are:
+
+- Every inter reference must remain within the current tile, including the
+  interpolation taps for luma and 4:2:0 chroma, shared chroma for sub-8x8
+  blocks, both compound references, warped prediction, and OBMC neighbor
+  predictions. Outer frame edges are constrained too, so frame padding cannot
+  become a dependency on an adjacent tile after composition. Fractional and
+  high-precision motion and interpolation search remain available where safe.
+  The checks also apply after late motion refinement. Local affine models
+  must retain the same translation-clamping result after tile relocation.
+- NEWMV predictors must also survive frame-edge clamping when a tile becomes
+  a standalone frame; a local final MV alone does not ensure the coded motion
+  delta will reconstruct the same vector after extraction.
+- Intra block copy retains its existing tile-local displacement checks;
+  palette and other screen-content tools retain their ordinary mode settings.
+- Entropy adaptation within a tile remains enabled when ordinarily permitted.
+  Each frame starts from default entropy contexts (`PRIMARY_REF_NONE`) rather
+  than inheriting the final context of another tile in a reference frame.
+- Deblocking, CDEF, and loop restoration are disabled because their normative
+  reference filtering can cross tile boundaries. Skipping filtering only in
+  the encoder would not match an ordinary AV1 decoder.
+- Temporal MV projection (MFMV) is disabled because it can import motion
+  metadata from another reference tile, even when final prediction samples
+  would be local.
+- Super-resolution, resizing, frame-resize events, and runtime resolution
+  changes are rejected: scaled reference footprints and tile mappings are
+  not supported. They are not silently disabled.
+  Runtime reference-scaling events are likewise rejected unless they request
+  no scaling.
+
+Keyframe requests, S-frames, multipass, and runtime events otherwise follow
+the ordinary coding-mode validation. Temporal filtering and rate-control
+analysis may inspect other source tiles; this does not create a decoder
+dependency or guarantee identical encoding when neighboring source content
+changes.
+
+`--mcts-base-qp 1..63` is optional and requires lossy VBR or CBR with AQ mode 2.
+It fixes only the frame-header base QP, using superblock delta-Q for each
+encoder's effective quantizer, and disables cyclic refresh in this mode.
+It does not choose a preset, GOP, reference policy, or prediction structure.
+For example, CBR can use
+`--mcts 1 --mcts-base-qp 35 --rc 2 --pred-struct 1 --tbr 1000`.
+Bitrate remains a target, not a guarantee. The default value `-1` leaves the
+ordinary quantizer policy unchanged.
+
+**Tile independence is not automatic compatibility between independent
+encoders.** Before merging, validate all shared sequence/frame headers,
+quantization and global-motion metadata, reference refresh/selection fields,
+frame counts, timestamps, EOS, and the random-access `show_existing_frame`
+schedule. A common base QP alone is insufficient. Coordinate-dependent
+global-motion or film-grain metadata may need adjustment for relocated tiles;
+film grain is display synthesis, not reference filtering. Keep internal
+borders superblock-aligned and each tile on its encoded reference history
+until a common closed random-access boundary. Applications must explicitly
+coordinate scene changes, dynamic GOP, overlays, and any runtime schedule
+changes if independently encoded streams are to be composed. GPAC
+`av1merge` acceptance and full-frame decoder success alone do not prove
+compatibility; compare decoded tile samples over subsequent frames.
+
+`PRIVATE_DATA` nodes in fixed-base VBR are returned in the display-frame
+output's `p_app_private`, not written into the bitstream. Payloads remain
+caller-owned and must stay valid until the output packet is released.
 
 
 #### **Super-Resolution**

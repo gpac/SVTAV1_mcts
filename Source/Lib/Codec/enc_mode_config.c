@@ -9189,14 +9189,6 @@ void svt_aom_sig_deriv_mode_decision_config_default(SequenceControlSet* scs, Pic
 #endif
     frm_hdr->is_motion_mode_switchable = frm_hdr->allow_warped_motion;
 #endif
-    if (scs->static_config.tile_mcts) {
-        pcs->wm_level                      = 0;
-        frm_hdr->allow_high_precision_mv   = 0;
-        frm_hdr->allow_warped_motion       = 0;
-        frm_hdr->is_motion_mode_switchable = 0;
-        ppcs->pic_obmc_level               = 0;
-    }
-
     if (enc_mode <= ENC_M9) {
         pcs->approx_inter_rate = 0;
     } else {
@@ -9280,8 +9272,6 @@ void svt_aom_sig_deriv_mode_decision_config_default(SequenceControlSet* scs, Pic
             }
         }
     }
-    if (scs->static_config.tile_mcts)
-        pcs->interpolation_search_level = 0;
     frm_hdr->interpolation_filter = pcs->interpolation_search_level ? SWITCHABLE : EIGHTTAP_REGULAR;
 
     pcs->chroma_level = svt_aom_get_chroma_level_default(enc_mode, is_islice);

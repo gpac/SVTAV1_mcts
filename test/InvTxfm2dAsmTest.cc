@@ -262,6 +262,39 @@ INSTANTIATE_TEST_SUITE_P(AVX512, InvTxfm2dAsmSqrTest,
 #endif  // ARCH_X86_64
 
 #ifdef ARCH_AARCH64
+TEST(InvTxfm2dNeonTest, Adst16StageRange) {
+    const std::array<int32_t, 16> coeffs = {115500,
+                                            32576,
+                                            13234,
+                                            3054,
+                                            -3054,
+                                            -6108,
+                                            -8144,
+                                            -8144,
+                                            -7126,
+                                            -6108,
+                                            -4072,
+                                            -1018,
+                                            1018,
+                                            3054,
+                                            5090,
+                                            6108};
+    for (const TxType type : {DCT_ADST, DCT_FLIPADST}) {
+        for (const int sign : {-1, 1}) {
+            std::array<int32_t, 256> input{};
+            std::array<uint16_t, 256> pred{}, expected{}, actual{};
+            for (size_t i = 0; i < coeffs.size(); ++i)
+                input[i] = sign * coeffs[i];
+            pred.fill(sign < 0 ? 1023 : 0);
+            svt_av1_inv_txfm2d_add_16x16_c(
+                input.data(), pred.data(), 16, expected.data(), 16, type, 10);
+            svt_av1_inv_txfm2d_add_16x16_neon(
+                input.data(), pred.data(), 16, actual.data(), 16, type, 10);
+            EXPECT_EQ(expected, actual) << "type=" << type << " sign=" << sign;
+        }
+    }
+}
+
 const InvSqrTxfmTestParam inv_txfm_c_neon_func_pairs[10] = {
     SQR_FUNC_PAIRS(svt_av1_inv_txfm2d_add_4x4, neon, TX_4X4, all_txtype_imp),
     SQR_FUNC_PAIRS(svt_av1_inv_txfm2d_add_8x8, neon, TX_8X8, all_txtype_imp),

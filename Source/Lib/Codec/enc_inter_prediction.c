@@ -773,6 +773,43 @@ static INLINE void foreach_overlappable_nb_left(uint8_t is16bit, const Av1Common
     }
 }
 
+struct obmc_tile_check {
+    const PictureControlSet* pcs;
+    bool                     above;
+    bool                     safe;
+};
+
+static void check_obmc_tile(uint8_t is16bit, MacroBlockD* xd, int rel_mi_pos, uint8_t nb_mi_size, MbModeInfo* nb_mi,
+                            void* context) {
+    (void)is16bit;
+    struct obmc_tile_check* check  = context;
+    const int               width  = check->above ? nb_mi_size * MI_SIZE : AOMMIN(block_size_wide[xd->bsize], 64) / 2;
+    const int               height = check->above ? AOMMIN(block_size_high[xd->bsize], 64) / 2 : nb_mi_size * MI_SIZE;
+    const int               x      = (xd->mi_col + (check->above ? rel_mi_pos : 0)) * MI_SIZE;
+    const int               y      = (xd->mi_row + (check->above ? 0 : rel_mi_pos)) * MI_SIZE;
+    // Chroma OBMC predicts at least four samples per dimension.
+    check->safe = check->safe &&
+        svt_av1_is_mv_tile_safe(&xd->tile,
+                                nb_mi->block_mi.mv[0],
+                                x,
+                                y,
+                                AOMMAX(8, width),
+                                AOMMAX(8, height),
+                                check->pcs->scs->static_config.source_width,
+                                check->pcs->scs->static_config.source_height,
+                                SWITCHABLE);
+}
+
+bool svt_aom_is_obmc_tile_safe(const PictureControlSet* pcs, MacroBlockD* xd) {
+    struct obmc_tile_check check = {pcs, true, true};
+    foreach_overlappable_nb_above(
+        0, pcs->ppcs->av1_cm, xd, xd->mi_col, max_neighbor_obmc[mi_size_wide_log2[xd->bsize]], check_obmc_tile, &check);
+    check.above = false;
+    foreach_overlappable_nb_left(
+        0, pcs->ppcs->av1_cm, xd, xd->mi_row, max_neighbor_obmc[mi_size_high_log2[xd->bsize]], check_obmc_tile, &check);
+    return check.safe;
+}
+
 static void av1_setup_build_prediction_by_above_pred(MacroBlockD* xd, int rel_mi_col, uint8_t above_mi_width,
                                                      MbModeInfo* above_mbmi, struct build_prediction_ctxt* ctxt) {
     const int above_mi_col = ctxt->mi_col + rel_mi_col;

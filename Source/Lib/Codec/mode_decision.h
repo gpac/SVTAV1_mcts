@@ -181,6 +181,8 @@ uint8_t  svt_aom_is_me_data_present(uint32_t me_block_offset, uint32_t me_cand_o
 
 int32_t    svt_aom_have_newmv_in_inter_mode(PredictionMode mode);
 uint8_t    svt_aom_get_max_drl_index(uint8_t refmvCnt, PredictionMode mode);
+bool       svt_aom_is_inter_candidate_tile_safe(const PictureControlSet* pcs, const struct ModeDecisionContext* ctx,
+                                                const ModeDecisionCandidate* cand);
 MotionMode svt_aom_obmc_motion_mode_allowed(const PictureControlSet* pcs, struct ModeDecisionContext* ctx,
                                             const BlockSize bsize, uint8_t situation, MvReferenceFrame rf0,
                                             MvReferenceFrame rf1, PredictionMode mode);

@@ -52,10 +52,6 @@ static void set_global_motion_field(PictureControlSet* pcs) {
         pcs->ppcs->global_motion[frame_index].wmmat[5] = (1 << WARPEDMODEL_PREC_BITS);
     }
 
-    if (pcs->scs->static_config.tile_mcts) {
-        return;
-    }
-
     //Update MV
     PictureParentControlSet* ppcs = pcs->ppcs;
     for (frame_index = INTRA_FRAME; frame_index <= ALTREF_FRAME; ++frame_index) {

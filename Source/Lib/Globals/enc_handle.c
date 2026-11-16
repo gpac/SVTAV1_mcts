@@ -3660,9 +3660,6 @@ static void set_mrp_ctrl(const SequenceControlSet* scs, MrpCtrls* mrp_ctrl, EncM
             }
         }
     }
-    if (scs->static_config.tile_mcts && scs->static_config.mcts_base_qp != -1 &&
-        scs->static_config.rate_control_mode == SVT_AV1_RC_MODE_VBR)
-        mrp_level = 11;
     set_mrp_ctrl_with_level(scs, mrp_ctrl, mrp_level);
 }
 
@@ -4041,9 +4038,6 @@ static void set_param_based_on_input(SequenceControlSet* scs) {
         } else {
             scs->static_config.qp = 30;
         }
-        if (scs->static_config.tile_mcts && scs->static_config.mcts_base_qp != -1 &&
-            scs->static_config.rate_control_mode == SVT_AV1_RC_MODE_VBR)
-            scs->static_config.qp = scs->static_config.mcts_base_qp;
     }
     svt_aom_derive_input_resolution(&scs->input_resolution, scs->max_input_luma_width * scs->max_input_luma_height);
 
@@ -4411,132 +4405,33 @@ static void set_still_image_fast_decode(SequenceControlSet* scs, const EbSvtAv1E
 }
 #endif // CONFIG_ENABLE_FAST_DECODE_3
 
-static EbErrorType apply_tile_mcts_profile(EbSvtAv1EncConfiguration* config) {
+static EbErrorType apply_tile_mcts_constraints(EbSvtAv1EncConfiguration* config) {
     const bool fixed_base = config->mcts_base_qp != -1;
-    const bool use_vbr    = fixed_base && config->rate_control_mode == SVT_AV1_RC_MODE_VBR;
-    if (fixed_base && (!config->tile_mcts || config->mcts_base_qp < 1 || config->mcts_base_qp > 63 ||
-                       config->lossless || config->max_qp_allowed == 0)) {
-        SVT_ERROR("--mcts-base-qp requires --mcts, a QP in [1,63], and lossy encoding.\n");
+    if (fixed_base &&
+        (!config->tile_mcts || config->mcts_base_qp < 1 || config->mcts_base_qp > 63 || config->lossless ||
+         config->max_qp_allowed == 0 || config->rate_control_mode == SVT_AV1_RC_MODE_CQP_OR_CRF ||
+         config->aq_mode != 2)) {
+        SVT_ERROR("--mcts-base-qp requires --mcts, a QP in [1,63], lossy VBR/CBR, and AQ mode 2.\n");
         return EB_ErrorBadParameter;
     }
     if (!config->tile_mcts) {
         return EB_ErrorNone;
     }
-
-    if (use_vbr && (config->target_bit_rate == DEFAULT_TBR || config->target_bit_rate == 0)) {
-        SVT_ERROR("--mcts random-access VBR requires a nonzero target other than the default sentinel 2000513 bps.\n");
-        return EB_ErrorBadParameter;
-    }
-    if (fixed_base && !use_vbr && config->rate_control_mode != SVT_AV1_RC_MODE_CBR &&
-        config->target_bit_rate == DEFAULT_TBR) {
-        SVT_ERROR("--mcts-base-qp requires CBR or an explicit target bitrate.\n");
-        return EB_ErrorBadParameter;
-    }
-    if (config->pass != ENC_SINGLE_PASS || config->sframe_dist != 0 || config->sframe_posi.sframe_posis ||
+    if (config->superres_mode != SUPERRES_NONE || config->resize_mode != RESIZE_NONE ||
         config->frame_scale_evts.evt_num != 0) {
-        SVT_ERROR("--mcts does not support multi-pass, S-frames, or frame resize events.\n");
+        SVT_ERROR("--mcts requires unscaled references; super-resolution and frame resizing are not supported.\n");
         return EB_ErrorBadParameter;
     }
 
-    const bool multiple_tiles = config->tile_columns > 0 || config->tile_rows > 0;
-    const bool use_cbr        = !use_vbr && (multiple_tiles || fixed_base) &&
-        (config->rate_control_mode == SVT_AV1_RC_MODE_VBR || config->rate_control_mode == SVT_AV1_RC_MODE_CBR ||
-         (config->rate_control_mode == SVT_AV1_RC_MODE_CQP_OR_CRF && config->target_bit_rate != DEFAULT_TBR));
-
-    if (use_cbr && config->target_bit_rate == 0) {
-        SVT_ERROR("--mcts CBR requires a nonzero target bitrate.\n");
-        return EB_ErrorBadParameter;
-    }
-
-    if (use_cbr && config->rate_control_mode != SVT_AV1_RC_MODE_CBR) {
-        SVT_WARN("--mcts uses low-delay CBR for the requested target bitrate.\n");
-    }
-    if (!use_cbr && !use_vbr && (config->target_bit_rate != DEFAULT_TBR || config->max_bit_rate != 0)) {
-        SVT_WARN("--mcts uses CQP; target and maximum bitrate settings are ignored.\n");
-    } else if ((use_cbr || use_vbr) && config->max_bit_rate != 0) {
-        SVT_WARN("--mcts ignores the maximum bitrate setting; rate control uses the target bitrate.\n");
-    }
-    if ((use_cbr || use_vbr) && (config->gop_constraint_rc || config->startup_qp_offset)) {
-        SVT_WARN("--mcts disables GOP-constrained VBR and the startup QP offset.\n");
-    }
-
+    // AV1 in-loop filters can read across tile boundaries. Projected temporal
+    // motion fields can likewise import another tile's motion metadata.
+    config->enable_dlf_flag              = 0;
+    config->cdef_level                   = 0;
+    config->enable_restoration_filtering = 0;
+    config->enable_mfmv                  = 0;
     SVT_WARN(
-        "--mcts applies a restricted profile: %s, %s GOP with closed key frames and without "
-        "scene-change detection/dynamic GOP/temporal filtering/overlays, deblocking/CDEF/restoration disabled, "
-        "MFMV/screen-content tools/scaling/film grain/quantization matrices disabled, full-pel motion search, and "
-        "global/warped motion disabled.\n",
-        use_vbr ? "VBR with fixed frame QP and superblock delta-Q"
-                : fixed_base ? "CBR with fixed frame QP and superblock delta-Q"
-                             : use_cbr ? "CBR with adaptive quantization" : "CQP with QP scaling and AQ disabled",
-        use_vbr ? "random-access" : "low-delay");
-
-    config->pred_structure = use_vbr ? RANDOM_ACCESS : LOW_DELAY;
-    if (!use_vbr)
-        config->hierarchical_levels = use_cbr ? 2 : 3;
-    else if (config->hierarchical_levels == HIERARCHICAL_LEVELS_AUTO)
-        config->hierarchical_levels = 3;
-    config->intra_refresh_type  = SVT_AV1_KF_REFRESH;
-    config->rtc                 = false;
-    if (use_cbr || use_vbr) {
-        config->rate_control_mode = use_vbr ? SVT_AV1_RC_MODE_VBR : SVT_AV1_RC_MODE_CBR;
-        config->aq_mode           = 2;
-        config->gop_constraint_rc = false;
-        config->startup_qp_offset = 0;
-    } else {
-        config->rate_control_mode = SVT_AV1_RC_MODE_CQP_OR_CRF;
-        config->aq_mode           = 0;
-        config->target_bit_rate   = DEFAULT_TBR;
-    }
-    config->max_bit_rate                         = 0;
-    config->scene_change_detection               = 0;
-    config->enable_dg                            = false;
-    config->look_ahead_distance                  = use_vbr ? (uint32_t)~0 : 0;
-    config->enable_tf                            = 0;
-    config->enable_tf_key                        = false;
-    config->enable_overlays                      = false;
-    config->startup_mg_size                      = 0;
-    config->force_key_frames                     = false;
-    config->enable_dlf_flag                      = 0;
-    config->cdef_level                           = 0;
-    config->enable_restoration_filtering         = 0;
-    config->enable_mfmv                          = 0;
-    config->screen_content_mode                  = 0;
-    config->enable_intrabc                       = false;
-    config->superres_mode                        = SUPERRES_NONE;
-    config->resize_mode                          = RESIZE_NONE;
-    config->film_grain_denoise_strength          = 0;
-    config->film_grain_denoise_apply             = 0;
-    config->fgs_table                            = NULL;
-    config->adaptive_film_grain                  = false;
-    config->enable_qm                            = false;
-    config->fast_decode                          = 0;
-    config->fast_decode_user_opts                = 0;
-    config->tune                                 = TUNE_PSNR;
-    config->use_qp_file                          = false;
-    config->use_fixed_qindex_offsets             = 0;
-    config->key_frame_chroma_qindex_offset       = 0;
-    config->key_frame_qindex_offset              = 0;
-    config->luma_y_dc_qindex_offset              = 0;
-    config->chroma_u_dc_qindex_offset            = 0;
-    config->chroma_u_ac_qindex_offset            = 0;
-    config->chroma_v_dc_qindex_offset            = 0;
-    config->chroma_v_ac_qindex_offset            = 0;
-    config->enable_roi_map                       = false;
-    config->enable_variance_boost                = false;
-    config->luminance_qp_bias                    = 0;
-    config->qp_scale_compress_strength           = 0;
-    config->max_managed_refs                     = 0;
-    config->max_hierarchical_levels              = 0;
-    config->max_allowed_consecutive_frames_skips = 0;
-    if (use_vbr) {
-        if (config->enc_mode != ENC_M10)
-            SVT_WARN("--mcts random-access VBR uses preset 10 for a common frame-header profile.\n");
-        config->enc_mode    = ENC_M10;
-        config->recode_loop = DISALLOW_RECODE;
-    }
-    memset(config->qindex_offsets, 0, sizeof(config->qindex_offsets));
-    memset(config->chroma_qindex_offsets, 0, sizeof(config->chroma_qindex_offsets));
-
+        "--mcts disables cross-tile in-loop filtering and temporal MV projection; "
+        "prediction footprints and entropy contexts are tile-local.\n");
     return EB_ErrorNone;
 }
 
@@ -4552,7 +4447,7 @@ static void copy_api_from_app(SequenceControlSet* scs, EbSvtAv1EncConfiguration*
         scs->static_config.pred_structure = LOW_DELAY;
         SVT_WARN("Forcing low delay pred structure for RTC.\n");
     }
-    scs->enable_qp_scaling_flag = scs->allintra || config_struct->tile_mcts ? 0 : 1;
+    scs->enable_qp_scaling_flag = scs->allintra ? 0 : 1;
     // Set Picture Parameters for statistics gathering
     scs->picture_analysis_number_of_regions_per_width  = scs->max_input_luma_width >= 64
         ? HIGHER_THAN_CLASS_1_REGION_SPLIT_PER_WIDTH
@@ -5101,17 +4996,18 @@ EB_API EbErrorType svt_av1_enc_set_parameter(EbComponentType*          svt_enc_c
 
     EbEncHandle*        enc_handle = (EbEncHandle*)svt_enc_component->p_component_private;
     SequenceControlSet* scs        = enc_handle->scs_instance->scs;
-    EbSvtAv1EncConfiguration effective_config = *config_struct;
-    EbErrorType              return_error     = apply_tile_mcts_profile(&effective_config);
-    if (return_error != EB_ErrorNone) {
-        return return_error;
-    }
-    copy_api_from_app(scs, &effective_config);
-
-    return_error = svt_av1_verify_settings(scs);
+    copy_api_from_app(scs, config_struct);
+    EbErrorType return_error = svt_av1_verify_settings(scs);
 
     if (return_error == EB_ErrorBadParameter) {
         return EB_ErrorBadParameter;
+    }
+    if (scs->static_config.tile_mcts) {
+        validate_scaling_params(scs);
+    }
+    return_error = apply_tile_mcts_constraints(&scs->static_config);
+    if (return_error != EB_ErrorNone) {
+        return return_error;
     }
 #if RTC_BUILD
     // The RTC build is compiled for rtc mode only (SVT_RTC_TUNE, SVT_ALLINTRA): the settings above were derived as
@@ -5155,14 +5051,6 @@ EB_API EbErrorType svt_av1_enc_set_parameter(EbComponentType*          svt_enc_c
     }
 
     set_param_based_on_input(scs);
-
-    if (scs->static_config.tile_mcts && scs->static_config.mcts_base_qp == -1 &&
-        scs->static_config.rate_control_mode == SVT_AV1_RC_MODE_CBR &&
-        !(scs->static_config.tile_columns > 0 && scs->static_config.source_width > scs->sb_size) &&
-        !(scs->static_config.tile_rows > 0 && scs->static_config.source_height > scs->sb_size)) {
-        SVT_ERROR("--mcts CBR requires a tile layout with more than one tile at the selected frame size.\n");
-        return EB_ErrorBadParameter;
-    }
 
     // LTR pins anchors in DPB slots {4,5,6,7} (svt_aom_ref_mgmt_storeable_slots_mask).
     // That is only safe while the regular refs stay in the bottom 4, i.e. ref counts
@@ -5918,20 +5806,23 @@ EB_API EbErrorType svt_av1_enc_send_picture(EbComponentType* svt_enc_component, 
     EbBufferHeaderType* app_hdr    = p_buffer;
     SequenceControlSet* scs = enc_handle_ptr->scs_instance->scs;
     if (scs->static_config.tile_mcts) {
-        if (!(p_buffer->flags & EB_BUFFERFLAG_EOS) && p_buffer->pic_type == EB_AV1_KEY_PICTURE &&
-            enc_handle_ptr->frame_received) {
-            SVT_ERROR("--mcts does not support forced keyframes after the first frame.\n");
-            return EB_ErrorBadParameter;
-        }
         for (const EbPrivDataNode* node = (const EbPrivDataNode*)p_buffer->p_app_private; node; node = node->next) {
             if (node->node_type == RES_CHANGE_EVENT) {
                 SVT_ERROR("--mcts does not support runtime resolution changes.\n");
                 return EB_ErrorBadParameter;
             }
-            if (scs->static_config.mcts_base_qp != -1 &&
-                scs->static_config.rate_control_mode == SVT_AV1_RC_MODE_VBR && node->node_type != PRIVATE_DATA) {
-                SVT_ERROR("--mcts random-access VBR does not support runtime events.\n");
-                return EB_ErrorBadParameter;
+            if (node->node_type == REF_FRAME_SCALING_EVENT) {
+                if (!node->data || node->size != sizeof(EbRefFrameScale)) {
+                    SVT_ERROR("--mcts received an invalid reference-scaling event.\n");
+                    return EB_ErrorBadParameter;
+                }
+                const EbRefFrameScale* scale = (const EbRefFrameScale*)node->data;
+                if (scale->scale_mode != RESIZE_NONE &&
+                    !(scale->scale_mode == RESIZE_FIXED && scale->scale_denom == SCALE_NUMERATOR &&
+                      scale->scale_kf_denom == SCALE_NUMERATOR)) {
+                    SVT_ERROR("--mcts does not support runtime reference scaling.\n");
+                    return EB_ErrorBadParameter;
+                }
             }
         }
     }

@@ -64,6 +64,9 @@ EbErrorType    svt_aom_inter_pu_prediction_av1(uint8_t hbd_md, struct ModeDecisi
                                                ModeDecisionCandidateBuffer* cand_bf);
 
 void    svt_aom_precompute_obmc_data(PictureControlSet* pcs, struct ModeDecisionContext* ctx, uint32_t component_mask);
+#if CONFIG_ENABLE_OBMC
+bool svt_aom_is_obmc_tile_safe(const PictureControlSet* pcs, MacroBlockD* xd);
+#endif
 int64_t pick_wedge_fixed_sign(PictureControlSet* pcs, struct ModeDecisionContext* ctx, const BlockSize bsize,
                               const int16_t* const residual1, const int16_t* const diff10, const int8_t wedge_sign,
                               int8_t* const best_wedge_index);

@@ -431,7 +431,6 @@ class TileIndependenceTest : public SvtAv1E2ETestFramework {
         enable_invert_tile_decoding = true;
         enable_analyzer = enc_setting.name == "TileMctsCbr" ||
                           enc_setting.name == "TileMctsVbr" ||
-                          enc_setting.name == "TileMctsTarget" ||
                           enc_setting.name == "TileMctsFixedBase" ||
                           enc_setting.name == "TileMctsFixedBaseMulti" ||
                           enc_setting.name == "TileMctsFixedBaseMin" ||
@@ -461,10 +460,7 @@ class TileIndependenceTest : public SvtAv1E2ETestFramework {
                     ASSERT_EQ(1, info->delta_q_res_list[i]);
                 }
             }
-            if (enc_setting.name == "TileMctsSingleBitrate")
-                ASSERT_EQ(info->min_qindex, info->max_qindex);
-            else
-                ASSERT_LT(info->min_qindex, info->max_qindex);
+            ASSERT_LT(info->min_qindex, info->max_qindex);
         }
         SvtAv1E2ETestFramework::post_process();
     }
@@ -506,6 +502,7 @@ static const std::vector<EncTestSetting> tile_settings = {
       {"TileRow", "0"},
       {"TileMcts", "1"},
       {"RateControlMode", "2"},
+      {"PredStructure", "1"},
       {"TargetBitRate", "300"},
       {"LevelOfParallelism", "1"}},
      tile_mcts_test_vectors},
@@ -515,6 +512,7 @@ static const std::vector<EncTestSetting> tile_settings = {
       {"TileMcts", "1"},
       {"MctsBaseQp", "35"},
       {"RateControlMode", "2"},
+      {"PredStructure", "1"},
       {"TargetBitRate", "300"},
       {"LevelOfParallelism", "1"}},
      tile_mcts_test_vectors},
@@ -524,6 +522,7 @@ static const std::vector<EncTestSetting> tile_settings = {
       {"TileMcts", "1"},
       {"MctsBaseQp", "35"},
       {"RateControlMode", "2"},
+      {"PredStructure", "1"},
       {"TargetBitRate", "300"},
       {"LevelOfParallelism", "1"}},
      tile_mcts_test_vectors},
@@ -585,6 +584,7 @@ static const std::vector<EncTestSetting> tile_settings = {
       {"TileMcts", "1"},
       {"MctsBaseQp", "1"},
       {"RateControlMode", "2"},
+      {"PredStructure", "1"},
       {"TargetBitRate", "80"},
       {"LevelOfParallelism", "1"}},
      tile_mcts_test_vectors},
@@ -594,6 +594,7 @@ static const std::vector<EncTestSetting> tile_settings = {
       {"TileMcts", "1"},
       {"MctsBaseQp", "63"},
       {"RateControlMode", "2"},
+      {"PredStructure", "1"},
       {"TargetBitRate", "1000"},
       {"LevelOfParallelism", "1"}},
      tile_mcts_test_vectors},
@@ -608,13 +609,7 @@ static const std::vector<EncTestSetting> tile_settings = {
       {"TileRow", "1"},
       {"TileMcts", "1"},
       {"RateControlMode", "2"},
-      {"TargetBitRate", "300"},
-      {"LevelOfParallelism", "1"}},
-     tile_mcts_test_vectors},
-    {"TileMctsTarget",
-     {{"TileCol", "1"},
-      {"TileRow", "1"},
-      {"TileMcts", "1"},
+      {"PredStructure", "1"},
       {"TargetBitRate", "300"},
       {"LevelOfParallelism", "1"}},
      tile_mcts_test_vectors},
@@ -689,16 +684,19 @@ static const std::vector<TestVideoVector> mcts_vbr_schedule_vectors = {
 static std::vector<EncTestSetting> mcts_vbr_schedule_settings() {
     std::vector<EncTestSetting> settings;
     for (int level = 0; level <= 5; ++level) {
-        settings.push_back(
-            {"MctsVbrLevel" + std::to_string(level),
-             {{"TileMcts", "1"},
-              {"MctsBaseQp", "35"},
-              {"RateControlMode", "1"},
-              {"TargetBitRate", "80"},
-              {"IntraPeriod", "48"},
-              {"HierarchicalLevels", std::to_string(level)},
-              {"LevelOfParallelism", "1"}},
-             mcts_vbr_schedule_vectors});
+        settings.push_back({"MctsVbrLevel" + std::to_string(level),
+                            {{"TileMcts", "1"},
+                             {"EncoderMode", "10"},
+                             {"EnableDg", "0"},
+                             {"SceneChangeDetection", "0"},
+                             {"EnableOverlays", "0"},
+                             {"MctsBaseQp", "35"},
+                             {"RateControlMode", "1"},
+                             {"TargetBitRate", "80"},
+                             {"IntraPeriod", "48"},
+                             {"HierarchicalLevels", std::to_string(level)},
+                             {"LevelOfParallelism", "1"}},
+                            mcts_vbr_schedule_vectors});
     }
     return settings;
 }
@@ -751,6 +749,7 @@ static const std::vector<EncTestSetting> narrow_tile_settings = {
       {"TileRow", "1"},
       {"TileMcts", "1"},
       {"RateControlMode", "2"},
+      {"PredStructure", "1"},
       {"TargetBitRate", "500"},
       {"LevelOfParallelism", "4"}},
      narrow_tile_test_vectors}};

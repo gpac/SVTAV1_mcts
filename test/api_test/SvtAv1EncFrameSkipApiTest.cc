@@ -199,8 +199,14 @@ void configure_mcts(Encoder& encoder, uint8_t rate_control_mode) {
     encoder.config().tile_rows = 0;
     encoder.config().mcts_base_qp = rate_control_mode == SVT_AV1_RC_MODE_CQP_OR_CRF ? -1 : 35;
     encoder.config().rate_control_mode = rate_control_mode;
-    encoder.config().target_bit_rate = 300000;
+    encoder.config().target_bit_rate =
+        rate_control_mode == SVT_AV1_RC_MODE_CQP_OR_CRF
+            ? encoder.default_target_bit_rate()
+            : 300000;
     encoder.config().intra_period_length = 48;
+    encoder.config().rtc = false;
+    encoder.config().pred_structure =
+        rate_control_mode == SVT_AV1_RC_MODE_VBR ? RANDOM_ACCESS : LOW_DELAY;
 }
 
 TEST(SvtAv1FrameSkipApiTest, DefaultIsDisabled) {
@@ -229,18 +235,20 @@ TEST(SvtAv1FrameSkipApiTest, AcceptedOnlyForRtcLowDelayCbr) {
     EXPECT_EQ(EB_ErrorBadParameter, non_cbr.set_parameter());
 }
 
-TEST(SvtAv1FrameSkipApiTest, MctsRejectsForcedKeyframesAndAcceptsKeyTypedEos) {
-    for (const uint8_t mode : {SVT_AV1_RC_MODE_CQP_OR_CRF, SVT_AV1_RC_MODE_CBR, SVT_AV1_RC_MODE_VBR}) {
+TEST(SvtAv1FrameSkipApiTest, MctsAllowsLowDelayForcedKeyframesAndKeyTypedEos) {
+    for (const uint8_t mode :
+         {SVT_AV1_RC_MODE_CQP_OR_CRF, SVT_AV1_RC_MODE_CBR}) {
         SCOPED_TRACE(static_cast<int>(mode));
         Encoder encoder;
         configure_mcts(encoder, mode);
         ASSERT_EQ(EB_ErrorNone, encoder.set_parameter());
         ASSERT_EQ(EB_ErrorNone, encoder.init());
         ASSERT_EQ(EB_ErrorNone, encoder.send(EB_AV1_KEY_PICTURE, nullptr, false));
-        EXPECT_EQ(EB_ErrorBadParameter, encoder.send(EB_AV1_KEY_PICTURE, nullptr, false));
+        EXPECT_EQ(EB_ErrorNone,
+                  encoder.send(EB_AV1_KEY_PICTURE, nullptr, false));
         EXPECT_EQ(EB_ErrorNone, encoder.send(EB_AV1_INVALID_PICTURE, nullptr, false));
         ASSERT_EQ(EB_ErrorNone, encoder.send_eos(EB_AV1_KEY_PICTURE));
-        encoder.drain_to_eos(2);
+        encoder.drain_to_eos(3);
     }
 }
 
@@ -256,16 +264,31 @@ TEST(SvtAv1FrameSkipApiTest, MctsRejectsRuntimeResolutionChanges) {
         int data = 1;
         EbPrivDataNode first = make_event(PRIVATE_DATA, &data, &resize);
         EXPECT_EQ(EB_ErrorBadParameter, encoder.send(EB_AV1_KEY_PICTURE, &first, false));
-        SvtAv1RateInfo rate{};
-        rate.target_bit_rate = 20000;
-        EbPrivDataNode rate_change = make_event(RATE_CHANGE_EVENT, &rate);
-        EXPECT_EQ(EB_ErrorBadParameter, encoder.send(EB_AV1_INVALID_PICTURE, &rate_change, false));
         ASSERT_EQ(EB_ErrorNone, encoder.send(EB_AV1_KEY_PICTURE, nullptr, false));
         EXPECT_EQ(EB_ErrorBadParameter, encoder.send(EB_AV1_INVALID_PICTURE, &first, false));
         EXPECT_EQ(EB_ErrorNone, encoder.send(EB_AV1_INVALID_PICTURE, nullptr, false));
         ASSERT_EQ(EB_ErrorNone, encoder.send_eos(EB_AV1_INVALID_PICTURE));
         encoder.drain_to_eos(2);
     }
+}
+
+TEST(SvtAv1FrameSkipApiTest, MctsRejectsReferenceScalingAndAcceptsNoopScaling) {
+    Encoder encoder;
+    configure_mcts(encoder, SVT_AV1_RC_MODE_CBR);
+    ASSERT_EQ(EB_ErrorNone, encoder.set_parameter());
+    ASSERT_EQ(EB_ErrorNone, encoder.init());
+    EbRefFrameScale scale{};
+    scale.scale_mode = RESIZE_FIXED;
+    scale.scale_denom = scale.scale_kf_denom = 12;
+    EbPrivDataNode node = make_event(REF_FRAME_SCALING_EVENT, &scale);
+    EXPECT_EQ(EB_ErrorBadParameter,
+              encoder.send(EB_AV1_KEY_PICTURE, &node, false));
+    scale.scale_denom = scale.scale_kf_denom = 8;
+    ASSERT_EQ(EB_ErrorNone, encoder.send(EB_AV1_KEY_PICTURE, &node, false));
+    ASSERT_EQ(EB_ErrorNone,
+              encoder.send(EB_AV1_INVALID_PICTURE, nullptr, false));
+    ASSERT_EQ(EB_ErrorNone, encoder.send_eos(EB_AV1_INVALID_PICTURE));
+    encoder.drain_to_eos(2);
 }
 
 TEST(SvtAv1FrameSkipApiTest, MctsLowDelayAllowsUnrelatedRuntimeEvents) {
@@ -286,15 +309,10 @@ TEST(SvtAv1FrameSkipApiTest, MctsLowDelayAllowsUnrelatedRuntimeEvents) {
 
 TEST(SvtAv1FrameSkipApiTest, MctsVbrRejectsRuntimeScheduleChanges) {
     Encoder encoder;
-    encoder.config().tile_mcts = true;
-    encoder.config().mcts_base_qp = 35;
-    encoder.config().rate_control_mode = SVT_AV1_RC_MODE_VBR;
-    encoder.config().target_bit_rate = 300000;
-    encoder.config().intra_period_length = 48;
+    configure_mcts(encoder, SVT_AV1_RC_MODE_VBR);
     ASSERT_EQ(EB_ErrorNone, encoder.set_parameter());
     ASSERT_EQ(EB_ErrorNone, encoder.init());
     ASSERT_EQ(EB_ErrorNone, encoder.send(EB_AV1_KEY_PICTURE, nullptr, false));
-    EXPECT_EQ(EB_ErrorBadParameter, encoder.send(EB_AV1_KEY_PICTURE, nullptr, false));
     SvtAv1RefFrameCmd command{};
     command.pic_id = 1;
     EbPrivDataNode node = make_event(REF_STORE_EVENT, &command);
@@ -309,11 +327,7 @@ TEST(SvtAv1FrameSkipApiTest, MctsVbrAcceptsPrivateData) {
     int data = 42;
     EbPrivDataNode node = make_event(PRIVATE_DATA, &data);
     Encoder encoder;
-    encoder.config().tile_mcts = true;
-    encoder.config().mcts_base_qp = 35;
-    encoder.config().rate_control_mode = SVT_AV1_RC_MODE_VBR;
-    encoder.config().target_bit_rate = 300000;
-    encoder.config().intra_period_length = 48;
+    configure_mcts(encoder, SVT_AV1_RC_MODE_VBR);
     ASSERT_EQ(EB_ErrorNone, encoder.set_parameter());
     ASSERT_EQ(EB_ErrorNone, encoder.init());
     ASSERT_EQ(EB_ErrorNone, encoder.send(EB_AV1_KEY_PICTURE, &node, false));
@@ -324,11 +338,7 @@ TEST(SvtAv1FrameSkipApiTest, MctsVbrAcceptsPrivateData) {
 TEST(SvtAv1FrameSkipApiTest, MctsVbrPreservesPrivateDataOnReorderedFrames) {
     int data[17] = {};
     Encoder encoder;
-    encoder.config().tile_mcts = true;
-    encoder.config().mcts_base_qp = 35;
-    encoder.config().rate_control_mode = SVT_AV1_RC_MODE_VBR;
-    encoder.config().target_bit_rate = 300000;
-    encoder.config().intra_period_length = 48;
+    configure_mcts(encoder, SVT_AV1_RC_MODE_VBR);
     encoder.config().hierarchical_levels = 3;
     ASSERT_EQ(EB_ErrorNone, encoder.set_parameter());
     ASSERT_EQ(EB_ErrorNone, encoder.init());
@@ -342,11 +352,7 @@ TEST(SvtAv1FrameSkipApiTest, MctsVbrPreservesPrivateDataOnReorderedFrames) {
 
 TEST(SvtAv1FrameSkipApiTest, MctsVbrAcceptsKeyTypedEos) {
     Encoder encoder;
-    encoder.config().tile_mcts = true;
-    encoder.config().mcts_base_qp = 35;
-    encoder.config().rate_control_mode = SVT_AV1_RC_MODE_VBR;
-    encoder.config().target_bit_rate = 300000;
-    encoder.config().intra_period_length = 48;
+    configure_mcts(encoder, SVT_AV1_RC_MODE_VBR);
     ASSERT_EQ(EB_ErrorNone, encoder.set_parameter());
     ASSERT_EQ(EB_ErrorNone, encoder.init());
     ASSERT_EQ(EB_ErrorNone, encoder.send(EB_AV1_KEY_PICTURE, nullptr, false));
@@ -365,6 +371,18 @@ TEST(SvtAv1FrameSkipApiTest, ReturnsSuccessStatusAndCapsConsecutiveSkips) {
     EXPECT_EQ(EB_NoErrorFrameSkipped, encoder.send(EB_AV1_INVALID_PICTURE));
     EXPECT_EQ(EB_ErrorNone, encoder.send(EB_AV1_INVALID_PICTURE));
     EXPECT_EQ(EB_NoErrorFrameSkipped, encoder.send(EB_AV1_INVALID_PICTURE));
+}
+
+TEST(SvtAv1FrameSkipApiTest, MctsPreservesRtcFrameSkipping) {
+    Encoder encoder;
+    encoder.config().tile_mcts = true;
+    encoder.config().max_allowed_consecutive_frames_skips = 2;
+    ASSERT_EQ(EB_ErrorNone, encoder.set_parameter());
+    ASSERT_EQ(EB_ErrorNone, encoder.init());
+    ASSERT_EQ(EB_ErrorNone, encoder.send(EB_AV1_KEY_PICTURE));
+    EXPECT_EQ(EB_NoErrorFrameSkipped, encoder.send(EB_AV1_INVALID_PICTURE));
+    EXPECT_EQ(EB_NoErrorFrameSkipped, encoder.send(EB_AV1_INVALID_PICTURE));
+    EXPECT_EQ(EB_ErrorNone, encoder.send(EB_AV1_INVALID_PICTURE));
 }
 
 TEST(SvtAv1FrameSkipApiTest, SupportsTwoTemporalLayers) {

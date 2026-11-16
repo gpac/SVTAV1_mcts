@@ -1155,7 +1155,7 @@ static inline void idct16_xn_neon(int32x4_t* in, int32x4_t* out, int bit, int ho
     } while (++i < howmany);
 }
 
-static void iadst16_x4_neon(int32x4_t* in, int32x4_t* out, int32_t bit) {
+static void iadst16_x4_neon(int32x4_t* in, int32x4_t* out, int32_t bit, int stage_range) {
     const int32_t*  cospi = cospi_arr(bit);
     const int32x4_t vbit  = vdupq_n_s32(-bit);
 
@@ -1242,6 +1242,9 @@ static void iadst16_x4_neon(int32x4_t* in, int32x4_t* out, int32_t bit) {
     u[14] = vsubq_s32(v[6], v[14]);
     u[7]  = vaddq_s32(v[7], v[15]);
     u[15] = vsubq_s32(v[7], v[15]);
+    if (stage_range) {
+        clamp_neon(u, u, stage_range, 16);
+    }
 
     // stage 4
     v[0] = u[0];
@@ -1302,6 +1305,9 @@ static void iadst16_x4_neon(int32x4_t* in, int32x4_t* out, int32_t bit) {
     u[14] = vsubq_s32(v[10], v[14]);
     u[11] = vaddq_s32(v[11], v[15]);
     u[15] = vsubq_s32(v[11], v[15]);
+    if (stage_range) {
+        clamp_neon(u, u, stage_range, 16);
+    }
 
     // stage 6
     v[0] = u[0];
@@ -1363,6 +1369,9 @@ static void iadst16_x4_neon(int32x4_t* in, int32x4_t* out, int32_t bit) {
     u[14] = vsubq_s32(v[12], v[14]);
     u[13] = vaddq_s32(v[13], v[15]);
     u[15] = vsubq_s32(v[13], v[15]);
+    if (stage_range) {
+        clamp_neon(u, u, stage_range, 16);
+    }
 
     // stage 8
     v[0] = u[0];
@@ -1428,12 +1437,16 @@ static void iadst16_x4_neon(int32x4_t* in, int32x4_t* out, int32_t bit) {
     out[15] = vnegq_s32(v[1]);
 }
 
-static inline void iadst16_xn_neon(int32x4_t* in, int32x4_t* out, int bit, int howmany) {
+static inline void iadst16_xn_neon(int32x4_t* in, int32x4_t* out, int bit, int howmany, int stage_range) {
     const int stride = 16;
     int       i      = 0;
     do {
-        iadst16_x4_neon(in + i * stride, out + i * stride, bit);
+        iadst16_x4_neon(in + i * stride, out + i * stride, bit, stage_range);
     } while (++i < howmany);
+}
+
+static inline void iadst16_unclamped_xn_neon(int32x4_t* in, int32x4_t* out, int bit, int howmany) {
+    iadst16_xn_neon(in, out, bit, howmany, 0);
 }
 
 static inline void iidentity16_x4_neon(int32x4_t* in, int32x4_t* out, int bit) {
@@ -1458,6 +1471,8 @@ void svt_av1_inv_txfm2d_add_16x16_neon(const int32_t* input, uint16_t* output_r,
                                        int32_t stride_w, TxType tx_type, int32_t bd) {
     int32x4_t     in[64], out[64];
     const int8_t* shift = svt_aom_inv_txfm_shift_ls[TX_16X16];
+    const int     row_range = bd + 8;
+    const int     col_range = AOMMAX(bd + 6, 16);
 
     switch (tx_type) {
     case DCT_DCT:
@@ -1475,13 +1490,13 @@ void svt_av1_inv_txfm2d_add_16x16_neon(const int32_t* input, uint16_t* output_r,
         idct16_xn_neon(out, in, inv_cos_bit_row[2][2], 4);
         round_shift_neon(in, shift[0], 64);
         transpose_arrays_s32_16x16(in, out);
-        iadst16_xn_neon(out, in, inv_cos_bit_col[2][2], 4);
+        iadst16_xn_neon(out, in, inv_cos_bit_col[2][2], 4, col_range);
         write_buffer_16x16(in, output_r, stride_r, output_w, stride_w, 0, 0, shift[1], bd);
         break;
     case DCT_ADST:
         load_buffer_s32(input, in, 16, 16);
         transpose_arrays_s32_16x16(in, out);
-        iadst16_xn_neon(out, in, inv_cos_bit_row[2][2], 4);
+        iadst16_xn_neon(out, in, inv_cos_bit_row[2][2], 4, row_range);
         round_shift_neon(in, shift[0], 64);
         transpose_arrays_s32_16x16(in, out);
         idct16_xn_neon(out, in, inv_cos_bit_col[2][2], 4);
@@ -1490,10 +1505,10 @@ void svt_av1_inv_txfm2d_add_16x16_neon(const int32_t* input, uint16_t* output_r,
     case ADST_ADST:
         load_buffer_s32(input, in, 16, 16);
         transpose_arrays_s32_16x16(in, out);
-        iadst16_xn_neon(out, in, inv_cos_bit_row[2][2], 4);
+        iadst16_xn_neon(out, in, inv_cos_bit_row[2][2], 4, row_range);
         round_shift_neon(in, shift[0], 64);
         transpose_arrays_s32_16x16(in, out);
-        iadst16_xn_neon(out, in, inv_cos_bit_col[2][2], 4);
+        iadst16_xn_neon(out, in, inv_cos_bit_col[2][2], 4, col_range);
         write_buffer_16x16(in, output_r, stride_r, output_w, stride_w, 0, 0, shift[1], bd);
         break;
     case FLIPADST_DCT:
@@ -1502,13 +1517,13 @@ void svt_av1_inv_txfm2d_add_16x16_neon(const int32_t* input, uint16_t* output_r,
         idct16_xn_neon(out, in, inv_cos_bit_row[2][2], 4);
         round_shift_neon(in, shift[0], 64);
         transpose_arrays_s32_16x16(in, out);
-        iadst16_xn_neon(out, in, inv_cos_bit_col[2][2], 4);
+        iadst16_xn_neon(out, in, inv_cos_bit_col[2][2], 4, col_range);
         write_buffer_16x16(in, output_r, stride_r, output_w, stride_w, 0, 1, shift[1], bd);
         break;
     case DCT_FLIPADST:
         load_buffer_s32(input, in, 16, 16);
         transpose_arrays_s32_16x16(in, out);
-        iadst16_xn_neon(out, in, inv_cos_bit_row[2][2], 4);
+        iadst16_xn_neon(out, in, inv_cos_bit_row[2][2], 4, row_range);
         round_shift_neon(in, shift[0], 64);
         transpose_arrays_s32_16x16(in, out);
         idct16_xn_neon(out, in, inv_cos_bit_col[2][2], 4);
@@ -1517,28 +1532,28 @@ void svt_av1_inv_txfm2d_add_16x16_neon(const int32_t* input, uint16_t* output_r,
     case FLIPADST_FLIPADST:
         load_buffer_s32(input, in, 16, 16);
         transpose_arrays_s32_16x16(in, out);
-        iadst16_xn_neon(out, in, inv_cos_bit_row[2][2], 4);
+        iadst16_xn_neon(out, in, inv_cos_bit_row[2][2], 4, row_range);
         round_shift_neon(in, shift[0], 64);
         transpose_arrays_s32_16x16(in, out);
-        iadst16_xn_neon(out, in, inv_cos_bit_col[2][2], 4);
+        iadst16_xn_neon(out, in, inv_cos_bit_col[2][2], 4, col_range);
         write_buffer_16x16(in, output_r, stride_r, output_w, stride_w, 1, 1, shift[1], bd);
         break;
     case ADST_FLIPADST:
         load_buffer_s32(input, in, 16, 16);
         transpose_arrays_s32_16x16(in, out);
-        iadst16_xn_neon(out, in, inv_cos_bit_row[2][2], 4);
+        iadst16_xn_neon(out, in, inv_cos_bit_row[2][2], 4, row_range);
         round_shift_neon(in, shift[0], 64);
         transpose_arrays_s32_16x16(in, out);
-        iadst16_xn_neon(out, in, inv_cos_bit_col[2][2], 4);
+        iadst16_xn_neon(out, in, inv_cos_bit_col[2][2], 4, col_range);
         write_buffer_16x16(in, output_r, stride_r, output_w, stride_w, 1, 0, shift[1], bd);
         break;
     case FLIPADST_ADST:
         load_buffer_s32(input, in, 16, 16);
         transpose_arrays_s32_16x16(in, out);
-        iadst16_xn_neon(out, in, inv_cos_bit_row[2][2], 4);
+        iadst16_xn_neon(out, in, inv_cos_bit_row[2][2], 4, row_range);
         round_shift_neon(in, shift[0], 64);
         transpose_arrays_s32_16x16(in, out);
-        iadst16_xn_neon(out, in, inv_cos_bit_col[2][2], 4);
+        iadst16_xn_neon(out, in, inv_cos_bit_col[2][2], 4, col_range);
         write_buffer_16x16(in, output_r, stride_r, output_w, stride_w, 0, 1, shift[1], bd);
         break;
     case IDTX:
@@ -1568,13 +1583,13 @@ void svt_av1_inv_txfm2d_add_16x16_neon(const int32_t* input, uint16_t* output_r,
         load_buffer_s32(input, in, 16, 16);
         iidentity16_xn_neon(in, out, /*unused*/ 0, 4);
         round_shift_neon(out, shift[0], 64);
-        iadst16_xn_neon(out, in, inv_cos_bit_col[2][2], 4);
+        iadst16_xn_neon(out, in, inv_cos_bit_col[2][2], 4, col_range);
         write_buffer_16x16(in, output_r, stride_r, output_w, stride_w, 0, 0, shift[1], bd);
         break;
     case H_ADST:
         load_buffer_s32(input, in, 16, 16);
         transpose_arrays_s32_16x16(in, out);
-        iadst16_xn_neon(out, in, inv_cos_bit_row[2][2], 4);
+        iadst16_xn_neon(out, in, inv_cos_bit_row[2][2], 4, row_range);
         transpose_arrays_s32_16x16(in, out);
         round_shift_neon(out, shift[0], 64);
         iidentity16_xn_neon(out, in, /*unused*/ 0, 4);
@@ -1584,13 +1599,13 @@ void svt_av1_inv_txfm2d_add_16x16_neon(const int32_t* input, uint16_t* output_r,
         load_buffer_s32(input, in, 16, 16);
         iidentity16_xn_neon(in, out, /*unused*/ 0, 4);
         round_shift_neon(out, shift[0], 64);
-        iadst16_xn_neon(out, in, inv_cos_bit_col[2][2], 4);
+        iadst16_xn_neon(out, in, inv_cos_bit_col[2][2], 4, col_range);
         write_buffer_16x16(in, output_r, stride_r, output_w, stride_w, 0, 1, shift[1], bd);
         break;
     case H_FLIPADST:
         load_buffer_s32(input, in, 16, 16);
         transpose_arrays_s32_16x16(in, out);
-        iadst16_xn_neon(out, in, inv_cos_bit_row[2][2], 4);
+        iadst16_xn_neon(out, in, inv_cos_bit_row[2][2], 4, row_range);
         transpose_arrays_s32_16x16(in, out);
         round_shift_neon(out, shift[0], 64);
         iidentity16_xn_neon(out, in, /*unused*/ 0, 4);
@@ -2387,7 +2402,7 @@ static const ITX_TYPE_1D hitx_1d_tab[TX_TYPES] = {
 static const transform_1d_neon highbd_txfm_all_1d_zeros_w8_arr[TX_SIZES][ITX_TYPES_1D] = {
     {idct4_xn_neon, iadst4_xn_neon, iidentity4_xn_neon},
     {idct8_xn_neon, iadst8_xn_neon, iidentity8_xn_neon},
-    {idct16_xn_neon, iadst16_xn_neon, iidentity16_xn_neon},
+    {idct16_xn_neon, iadst16_unclamped_xn_neon, iidentity16_xn_neon},
     {idct32_xn_neon, /*iadst32_xn_neon*/ NULL, iidentity32_xn_neon},
 };
 

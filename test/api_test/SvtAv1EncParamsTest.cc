@@ -23,6 +23,8 @@
 #include "gtest/gtest.h"
 #include "params.h"
 #include "SvtAv1EncApiTest.h"
+#include "enc_handle.h"
+#include <cstring>
 
 using namespace svt_av1_test_params;
 using namespace svt_av1_test;
@@ -320,7 +322,63 @@ class TileMctsValidationTest : public EncParamTestBase {
     }
     void run_special_param_check() override {
     }
+    SequenceControlSet* effective_settings() {
+        return static_cast<EbEncHandle*>(ctxt_.enc_handle->p_component_private)
+            ->scs_instance->scs;
+    }
 };
+
+TEST_F(TileMctsValidationTest, PreservesEffectiveCodingModeSettings) {
+    for (const auto mode : {SVT_AV1_RC_MODE_CQP_OR_CRF,
+                            SVT_AV1_RC_MODE_VBR,
+                            SVT_AV1_RC_MODE_CBR}) {
+        for (const bool rtc : {false, true}) {
+            if (rtc && mode == SVT_AV1_RC_MODE_VBR)
+                continue;
+            SCOPED_TRACE(static_cast<int>(mode));
+            SCOPED_TRACE(rtc);
+            ctxt_.enc_params.tile_mcts = false;
+            ctxt_.enc_params.rate_control_mode = mode;
+            ctxt_.enc_params.rtc = rtc;
+            ctxt_.enc_params.pred_structure =
+                mode == SVT_AV1_RC_MODE_CBR || rtc ? LOW_DELAY : RANDOM_ACCESS;
+            ctxt_.enc_params.enc_mode = 8;
+            ctxt_.enc_params.aq_mode = 2;
+            ctxt_.enc_params.hierarchical_levels = 2;
+            ctxt_.enc_params.target_bit_rate =
+                mode == SVT_AV1_RC_MODE_CQP_OR_CRF ? 2000513 : 1000000;
+            ctxt_.enc_params.startup_qp_offset =
+                mode == SVT_AV1_RC_MODE_CQP_OR_CRF ? 3 : 0;
+            ctxt_.enc_params.tile_columns = 1;
+            ctxt_.enc_params.tile_rows = 1;
+            ctxt_.enc_params.enable_qm = true;
+            ctxt_.enc_params.chroma_u_ac_qindex_offset = 2;
+            ASSERT_EQ(
+                EB_ErrorNone,
+                svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+            auto expected = effective_settings()->static_config;
+            const auto qp_scaling =
+                effective_settings()->enable_qp_scaling_flag;
+            const auto references = effective_settings()->mrp_ctrls;
+            ctxt_.enc_params.tile_mcts = true;
+            ASSERT_EQ(
+                EB_ErrorNone,
+                svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+            const auto& actual = effective_settings()->static_config;
+            expected.tile_mcts = true;
+            expected.enable_dlf_flag = 0;
+            expected.cdef_level = 0;
+            expected.enable_restoration_filtering = 0;
+            expected.enable_mfmv = 0;
+            EXPECT_EQ(0, std::memcmp(&expected, &actual, sizeof(expected)));
+            EXPECT_EQ(qp_scaling, effective_settings()->enable_qp_scaling_flag);
+            EXPECT_EQ(0,
+                      std::memcmp(&references,
+                                  &effective_settings()->mrp_ctrls,
+                                  sizeof(references)));
+        }
+    }
+}
 
 TEST_F(TileMctsValidationTest, AcceptsSingleTileWithoutMutatingCaller) {
     ctxt_.enc_params.tile_mcts = true;
@@ -338,16 +396,16 @@ TEST_F(TileMctsValidationTest, AcceptsSingleTileWithoutMutatingCaller) {
     EXPECT_EQ(1, ctxt_.enc_params.enable_restoration_filtering);
 }
 
-TEST_F(TileMctsValidationTest, RejectsSFramesForSingleTile) {
+TEST_F(TileMctsValidationTest, AcceptsSFramesForSingleTile) {
     ctxt_.enc_params.tile_mcts = true;
     ctxt_.enc_params.tile_columns = 0;
     ctxt_.enc_params.tile_rows = 0;
     ctxt_.enc_params.sframe_dist = 8;
-    EXPECT_EQ(EB_ErrorBadParameter,
+    EXPECT_EQ(EB_ErrorNone,
               svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
 }
 
-TEST_F(TileMctsValidationTest, ConvertsMultiTileBitrateWithoutMutatingCaller) {
+TEST_F(TileMctsValidationTest, PreservesNormalBitrateValidation) {
     ctxt_.enc_params.tile_mcts = true;
     ctxt_.enc_params.tile_columns = 1;
     ctxt_.enc_params.tile_rows = 1;
@@ -355,7 +413,7 @@ TEST_F(TileMctsValidationTest, ConvertsMultiTileBitrateWithoutMutatingCaller) {
     ctxt_.enc_params.intra_refresh_type = SVT_AV1_FWDKF_REFRESH;
     ctxt_.enc_params.target_bit_rate = 1000000;
     ctxt_.enc_params.max_bit_rate = 2000000;
-    EXPECT_EQ(EB_ErrorNone,
+    EXPECT_EQ(EB_ErrorBadParameter,
               svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
     EXPECT_EQ(SVT_AV1_RC_MODE_VBR, ctxt_.enc_params.rate_control_mode);
     EXPECT_EQ(SVT_AV1_FWDKF_REFRESH, ctxt_.enc_params.intra_refresh_type);
@@ -363,27 +421,33 @@ TEST_F(TileMctsValidationTest, ConvertsMultiTileBitrateWithoutMutatingCaller) {
     EXPECT_EQ(2000000u, ctxt_.enc_params.max_bit_rate);
 }
 
-TEST_F(TileMctsValidationTest, IgnoresSingleTileBitrateWithoutMutatingCaller) {
+TEST_F(TileMctsValidationTest, PreservesSingleTileCbr) {
     ctxt_.enc_params.tile_mcts = true;
     ctxt_.enc_params.tile_columns = 0;
     ctxt_.enc_params.tile_rows = 0;
     ctxt_.enc_params.rate_control_mode = SVT_AV1_RC_MODE_CBR;
+    ctxt_.enc_params.pred_structure = LOW_DELAY;
     ctxt_.enc_params.target_bit_rate = 1000000;
     EXPECT_EQ(EB_ErrorNone,
               svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
     EXPECT_EQ(SVT_AV1_RC_MODE_CBR, ctxt_.enc_params.rate_control_mode);
     EXPECT_EQ(1000000u, ctxt_.enc_params.target_bit_rate);
+    EXPECT_EQ(SVT_AV1_RC_MODE_CBR,
+              effective_settings()->static_config.rate_control_mode);
+    EXPECT_EQ(1000000u, effective_settings()->static_config.target_bit_rate);
 }
 
 TEST_F(TileMctsValidationTest,
-       RejectsBitrateWhenRequestedSplitCannotProduceTiles) {
+       AcceptsBitrateWhenRequestedSplitProducesSingleTile) {
     ctxt_.enc_params.tile_mcts = true;
     ctxt_.enc_params.source_width = 64;
     ctxt_.enc_params.source_height = 64;
     ctxt_.enc_params.tile_columns = 1;
     ctxt_.enc_params.tile_rows = 0;
+    ctxt_.enc_params.rate_control_mode = SVT_AV1_RC_MODE_CBR;
+    ctxt_.enc_params.pred_structure = LOW_DELAY;
     ctxt_.enc_params.target_bit_rate = 1000000;
-    EXPECT_EQ(EB_ErrorBadParameter,
+    EXPECT_EQ(EB_ErrorNone,
               svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
 }
 
@@ -391,12 +455,10 @@ TEST_F(TileMctsValidationTest, RejectsInvalidMultiTileTargetBitrates) {
     ctxt_.enc_params.tile_mcts = true;
     ctxt_.enc_params.tile_columns = 1;
     ctxt_.enc_params.rate_control_mode = SVT_AV1_RC_MODE_CBR;
-    for (uint32_t bitrate : {0u, 100000001u}) {
-        ctxt_.enc_params.target_bit_rate = bitrate;
-        EXPECT_EQ(
-            EB_ErrorBadParameter,
-            svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
-    }
+    ctxt_.enc_params.pred_structure = LOW_DELAY;
+    ctxt_.enc_params.target_bit_rate = 100000001;
+    EXPECT_EQ(EB_ErrorBadParameter,
+              svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
 }
 
 TEST_F(TileMctsValidationTest, FixedBaseRequiresLossyMctsAndBitrate) {
@@ -407,6 +469,7 @@ TEST_F(TileMctsValidationTest, FixedBaseRequiresLossyMctsAndBitrate) {
     EXPECT_EQ(EB_ErrorBadParameter,
               svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
     ctxt_.enc_params.rate_control_mode = SVT_AV1_RC_MODE_CBR;
+    ctxt_.enc_params.pred_structure = LOW_DELAY;
     ctxt_.enc_params.target_bit_rate = 300000;
     EXPECT_EQ(EB_ErrorNone,
               svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
@@ -421,26 +484,44 @@ TEST_F(TileMctsValidationTest, FixedBaseRequiresLossyMctsAndBitrate) {
               svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
     ctxt_.enc_params.mcts_base_qp = 35;
     ctxt_.enc_params.rate_control_mode = SVT_AV1_RC_MODE_VBR;
+    ctxt_.enc_params.pred_structure = RANDOM_ACCESS;
     EXPECT_EQ(EB_ErrorNone,
               svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
     ctxt_.enc_params.target_bit_rate = 0;
-    EXPECT_EQ(EB_ErrorBadParameter,
+    EXPECT_EQ(EB_ErrorNone,
               svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
     ctxt_.enc_params.target_bit_rate = 2000513;
-    EXPECT_EQ(EB_ErrorBadParameter,
+    EXPECT_EQ(EB_ErrorNone,
               svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
     ctxt_.enc_params.target_bit_rate = 300000;
     ctxt_.enc_params.rate_control_mode = SVT_AV1_RC_MODE_CBR;
+    ctxt_.enc_params.pred_structure = LOW_DELAY;
     ctxt_.enc_params.lossless = true;
     EXPECT_EQ(EB_ErrorBadParameter,
               svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
 }
 
-TEST_F(TileMctsValidationTest, LowDelayVbrStillRejectedWithoutMcts) {
-    ctxt_.enc_params.tile_mcts = false;
+TEST_F(TileMctsValidationTest, LowDelayVbrStillRejectedWithOrWithoutMcts) {
     ctxt_.enc_params.pred_structure = LOW_DELAY;
     ctxt_.enc_params.rate_control_mode = SVT_AV1_RC_MODE_VBR;
     ctxt_.enc_params.target_bit_rate = 300000;
+    for (const bool mcts : {false, true}) {
+        ctxt_.enc_params.tile_mcts = mcts;
+        EXPECT_EQ(
+            EB_ErrorBadParameter,
+            svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+    }
+}
+
+TEST_F(TileMctsValidationTest, RejectsScalingInsteadOfSilentlyDisablingIt) {
+    ctxt_.enc_params.tile_mcts = true;
+    ctxt_.enc_params.superres_mode = SUPERRES_FIXED;
+    ctxt_.enc_params.superres_denom = 12;
+    EXPECT_EQ(EB_ErrorBadParameter,
+              svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
+    ctxt_.enc_params.superres_mode = SUPERRES_NONE;
+    ctxt_.enc_params.resize_mode = RESIZE_FIXED;
+    ctxt_.enc_params.resize_denom = 12;
     EXPECT_EQ(EB_ErrorBadParameter,
               svt_av1_enc_set_parameter(ctxt_.enc_handle, &ctxt_.enc_params));
 }

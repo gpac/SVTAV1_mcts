@@ -742,6 +742,18 @@ static bool rc_handle_superres(PictureControlSet* pcs, RateControlContext* conte
     return false;
 }
 
+void svt_av1_rc_set_mcts_base_qp(PictureControlSet* pcs) {
+    const int base_qp = pcs->scs->static_config.mcts_base_qp;
+    if (base_qp != -1) {
+        PictureParentControlSet* ppcs                = pcs->ppcs;
+        ppcs->rc_qindex                              = ppcs->frm_hdr.quantization_params.base_q_idx;
+        ppcs->frm_hdr.quantization_params.base_q_idx = quantizer_to_qindex[base_qp];
+        // A skipped SB retains the previous tile Q until the next coded SB.
+        ppcs->frm_hdr.delta_q_params.delta_q_present = 1;
+        ppcs->frm_hdr.delta_q_params.delta_q_res     = 1;
+    }
+}
+
 static void generate_sb_qindex(PictureControlSet* pcs) {
     PictureParentControlSet* ppcs = pcs->ppcs;
     SequenceControlSet*      scs  = pcs->scs;
@@ -889,13 +901,7 @@ EbErrorType svt_aom_rate_control_kernel_iter(void* context) {
             ppcs->frm_hdr.delta_q_params.delta_q_res = 1;
         generate_sb_qindex(pcs);
 
-        if (scs->static_config.mcts_base_qp != -1) {
-            ppcs->rc_qindex = ppcs->frm_hdr.quantization_params.base_q_idx;
-            ppcs->frm_hdr.quantization_params.base_q_idx = quantizer_to_qindex[scs->static_config.mcts_base_qp];
-            // A fully skipped SB has no coefficients; entropy coding retains the previous tile Q until the next coded SB.
-            ppcs->frm_hdr.delta_q_params.delta_q_present = 1;
-            ppcs->frm_hdr.delta_q_params.delta_q_res     = 1;
-        }
+        svt_av1_rc_set_mcts_base_qp(pcs);
 
         // Get Empty Rate Control Results Buffer
         EbObjectWrapper* rc_results_wrapper;

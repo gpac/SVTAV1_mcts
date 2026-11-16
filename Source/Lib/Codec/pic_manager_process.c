@@ -822,7 +822,9 @@ EbErrorType svt_aom_picture_manager_kernel_iter(void* context) {
                 assert(ref_entry != 0);
                 CHECK_REPORT_ERROR((ref_entry), enc_ctx->app_callback_ptr, EB_ENC_PM_ERROR10);
 
-                if (entry_ppcs->frame_end_cdf_update_mode) {
+                // A saved frame context comes from one tile, not necessarily this tile.
+                // MCTS keeps within-tile adaptation but resets cross-frame inheritance.
+                if (entry_ppcs->frame_end_cdf_update_mode && !scs->static_config.tile_mcts) {
                     if (max_temporal_index < (int8_t)ref_entry->temporal_layer_index &&
                         (int8_t)ref_entry->temporal_layer_index <= child_pcs->temporal_layer_index) {
                         max_temporal_index = (int8_t)ref_entry->temporal_layer_index;
@@ -867,7 +869,7 @@ EbErrorType svt_aom_picture_manager_kernel_iter(void* context) {
             }
         }
 
-        if (entry_ppcs->frame_end_cdf_update_mode) {
+        if (entry_ppcs->frame_end_cdf_update_mode && !scs->static_config.tile_mcts) {
             if (entry_ppcs->slice_type != I_SLICE && entry_ppcs->frm_hdr.frame_type != S_FRAME) {
                 child_pcs->ppcs->frm_hdr.primary_ref_frame = ref_index;
             } else {

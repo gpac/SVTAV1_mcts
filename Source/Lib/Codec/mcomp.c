@@ -113,6 +113,9 @@ static AOM_FORCE_INLINE unsigned int check_better_fast_in_range(Mv this_mv, Mv* 
                                                                 const svt_mv_cost_param*        mv_cost_params,
                                                                 unsigned int* besterr, int* distortion,
                                                                 const uint32_t* pre_mse) {
+    if (!svt_av1_is_subpel_tile_safe(var_params, this_mv)) {
+        return INT_MAX;
+    }
     unsigned int cost;
     int          thismse;
     cost = svt_aom_fp_mv_err_cost(this_mv, mv_cost_params);
@@ -153,7 +156,7 @@ static AOM_FORCE_INLINE unsigned int svt_check_better(MacroBlockD* xd, const str
                                                       const SUBPEL_SEARCH_VAR_PARAMS* var_params,
                                                       const svt_mv_cost_param* mv_cost_params, unsigned int* besterr) {
     unsigned int cost;
-    if (svt_av1_is_subpelmv_in_range(mv_limits, this_mv)) {
+    if (svt_av1_is_subpelmv_in_range(mv_limits, this_mv) && svt_av1_is_subpel_tile_safe(var_params, this_mv)) {
         int thismse;
         thismse = svt_upsampled_pref_error(xd, cm, this_mv, var_params);
         cost    = svt_aom_fp_mv_err_cost(this_mv, mv_cost_params);
@@ -409,6 +412,10 @@ int svt_av1_find_best_sub_pixel_tree_pruned(void* ictx, MacroBlockD* xd, const s
         ctx->fp_me_dist[ms_params->list_idx][ms_params->ref_idx] = besterr;
     }
 
+    if (!svt_av1_is_subpel_tile_safe(var_params, *bestmv)) {
+        besterr     = INT_MAX;
+        *distortion = 0;
+    }
     const uint32_t th_normalizer = var_params->w * var_params->h * ms_params->abs_th_mult;
     if (besterr < th_normalizer) {
         return besterr;
@@ -506,6 +513,10 @@ int svt_av1_find_best_sub_pixel_tree(void* ictx, MacroBlockD* xd, const struct A
                 round = MIN(round, 2);
             }
         }
+    }
+    if (!svt_av1_is_subpel_tile_safe(var_params, *bestmv)) {
+        besterr     = INT_MAX;
+        *distortion = 0;
     }
     const uint32_t th_normalizer = var_params->w * var_params->h * ms_params->abs_th_mult;
     if (besterr < th_normalizer) {

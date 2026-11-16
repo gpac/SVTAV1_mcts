@@ -937,9 +937,8 @@ ConfigDescription config_entry_specific[] = {
     {TILE_COL_TOKEN,
      "Number of tile columns to use, `TileCol == log2(x)`, default changes per resolution but is 1 [0-4]"},
     {MCTS_TOKEN,
-     "Enable motion-constrained encoding for one or more tiles and apply a restricted, independently "
-     "decodable profile, default is 0 [0-1]"},
-    {MCTS_BASE_QP_TOKEN, "Fixed frame-header QP for MCTS CBR, default is -1 [-1: off, 1-63]"},
+     "Constrain decoder dependencies to each tile without changing the selected coding mode, default is 0 [0-1]"},
+    {MCTS_BASE_QP_TOKEN, "Fixed frame-header QP for MCTS VBR/CBR with AQ 2, default is -1 [-1: off, 1-63]"},
 
     // DLF
     {LOOP_FILTER_ENABLE, "Deblocking loop filter control, default is 1 [0-2]"},

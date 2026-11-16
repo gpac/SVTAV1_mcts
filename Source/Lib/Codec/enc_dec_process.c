@@ -1992,6 +1992,9 @@ static void recode_loop_decision_maker(PictureControlSet* pcs, SequenceControlSe
     RATE_CONTROL* const      rc      = &(enc_ctx->rc);
     bool                     loop    = false;
     FrameHeader*             frm_hdr = &ppcs->frm_hdr;
+    if (scs->static_config.mcts_base_qp != -1) {
+        frm_hdr->quantization_params.base_q_idx = ppcs->rc_qindex;
+    }
 
     // RTC CBR path: use VBV-based recode decision
     if (scs->static_config.rate_control_mode == SVT_AV1_RC_MODE_CBR && scs->static_config.rtc) {
@@ -2006,6 +2009,7 @@ static void recode_loop_decision_maker(PictureControlSet* pcs, SequenceControlSe
             }
             *do_recode = true;
         }
+        svt_av1_rc_set_mcts_base_qp(pcs);
         return;
     }
 
@@ -2047,6 +2051,10 @@ static void recode_loop_decision_maker(PictureControlSet* pcs, SequenceControlSe
         ppcs->picture_qp = (uint8_t)CLIP3((int32_t)scs->static_config.min_qp_allowed,
                                           (int32_t)scs->static_config.max_qp_allowed,
                                           (frm_hdr->quantization_params.base_q_idx + 2) >> 2);
+        if (scs->static_config.mcts_base_qp != -1) {
+            ppcs->rc_qindex                     = frm_hdr->quantization_params.base_q_idx;
+            frm_hdr->delta_q_params.delta_q_res = 1;
+        }
 
         // set initial SB base_q_idx values
         pcs->ppcs->frm_hdr.delta_q_params.delta_q_present = 0;
@@ -2074,6 +2082,7 @@ static void recode_loop_decision_maker(PictureControlSet* pcs, SequenceControlSe
     } else {
         ppcs->loop_count = 0;
     }
+    svt_av1_rc_set_mcts_base_qp(pcs);
 }
 
 /* for debug/documentation purposes: list all features assumed off for light pd1*/

@@ -75,9 +75,25 @@ typedef struct {
     MSBuffers ms_buffers;
 
     int w, h;
+    const TileInfo* tile;
+    int             mi_row, mi_col;
+    int             frame_width, frame_height;
     int32_t
         bias_fp; // Bias towards fpel at the MD subpel-search: apply a penalty to the cost of fractional positions during the subpel-search each time we check against a full-pel MV
 } SUBPEL_SEARCH_VAR_PARAMS;
+
+static INLINE bool svt_av1_is_subpel_tile_safe(const SUBPEL_SEARCH_VAR_PARAMS* params, Mv mv) {
+    return !params->tile ||
+        svt_av1_is_mv_tile_safe(params->tile,
+                                mv,
+                                params->mi_col * MI_SIZE,
+                                params->mi_row * MI_SIZE,
+                                params->w,
+                                params->h,
+                                params->frame_width,
+                                params->frame_height,
+                                SWITCHABLE);
+}
 
 // This struct holds subpixel motion search parameters that should be constant
 // during the search

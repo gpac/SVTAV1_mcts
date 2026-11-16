@@ -14,6 +14,8 @@
 
 #include "definitions.h"
 #include "coding_unit.h"
+#include "inter_prediction.h"
+#include "warped_motion.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,6 +39,104 @@ static INLINE void svt_av1_constrain_mv_limits_to_tile(MvLimits* mv_limits, cons
     mv_limits->col_max = AOMMIN(mv_limits->col_max, AOMMAX(0, right - mi_col * MI_SIZE - block_width));
     mv_limits->row_min = AOMMAX(mv_limits->row_min, (tile->mi_row_start - mi_row) * MI_SIZE);
     mv_limits->row_max = AOMMIN(mv_limits->row_max, AOMMAX(0, bottom - mi_row * MI_SIZE - block_height));
+}
+
+static INLINE bool svt_av1_is_mv_predictor_tile_safe(const MacroBlockD* xd, Mv mv) {
+    // NEWMV deltas must survive the decoder's frame-relative reference-MV clamp after extraction.
+    const int left   = (xd->tile.mi_col_start - xd->mi_col - xd->n8_w) * MI_SIZE * 8 - MV_BORDER;
+    const int right  = (xd->tile.mi_col_end - xd->mi_col) * MI_SIZE * 8 + MV_BORDER;
+    const int top    = (xd->tile.mi_row_start - xd->mi_row - xd->n8_h) * MI_SIZE * 8 - MV_BORDER;
+    const int bottom = (xd->tile.mi_row_end - xd->mi_row) * MI_SIZE * 8 + MV_BORDER;
+    return mv.x >= left && mv.x <= right && mv.y >= top && mv.y <= bottom;
+}
+
+static INLINE bool svt_av1_is_interp_axis_tile_safe(int origin, int size, int filter_size, int mv, int subsampling,
+                                                    int tile_start, int tile_end, InterpFilter filter) {
+    const int shift        = 3 + subsampling;
+    const int phase        = (mv & ((1 << shift) - 1)) << (1 - subsampling);
+    int       first        = 0;
+    int       last         = 0;
+    const int first_filter = filter == SWITCHABLE ? EIGHTTAP_REGULAR : filter;
+    const int last_filter  = filter == SWITCHABLE ? MULTITAP_SHARP : filter;
+    for (int f = first_filter; f <= last_filter; ++f) {
+        const InterpFilterParams params = av1_get_interp_filter_params_with_block_size((InterpFilter)f, filter_size);
+        const int16_t*           kernel = av1_get_interp_filter_subpel_kernel(params, phase);
+        for (int tap = 0; tap < params.taps; ++tap) {
+            if (kernel[tap]) {
+                first = AOMMIN(first, tap - (params.taps / 2 - 1));
+                last  = AOMMAX(last, tap - (params.taps / 2 - 1));
+            }
+        }
+    }
+    const int start = origin + (mv >> shift);
+    return start + first >= tile_start && start + size + last <= tile_end;
+}
+
+// MV components are in eighth-luma-pel units, including for 4:2:0 chroma.
+// Check the union of switchable filters before interpolation search selects one.
+static INLINE bool svt_av1_is_mv_tile_safe(const TileInfo* tile, Mv mv, int x, int y, int width, int height,
+                                           int frame_width, int frame_height, InterpFilter filter) {
+    for (int ss = 0; ss <= 1; ++ss) {
+        const int px             = ss ? (x & ~7) >> 1 : x;
+        const int py             = ss ? (y & ~7) >> 1 : y;
+        const int pw             = ss ? AOMMAX(8, width) >> 1 : width;
+        const int ph             = ss ? AOMMAX(8, height) >> 1 : height;
+        const int right          = AOMMIN(tile->mi_col_end * MI_SIZE, frame_width) >> ss;
+        const int bottom         = AOMMIN(tile->mi_row_end * MI_SIZE, frame_height) >> ss;
+        const int visible_width  = AOMMIN(pw, (frame_width >> ss) - px);
+        const int visible_height = AOMMIN(ph, (frame_height >> ss) - py);
+        if (visible_width <= 0 || visible_height <= 0) {
+            continue;
+        }
+        if (!svt_av1_is_interp_axis_tile_safe(
+                px, visible_width, pw, mv.x, ss, (tile->mi_col_start * MI_SIZE) >> ss, right, filter) ||
+            !svt_av1_is_interp_axis_tile_safe(
+                py, visible_height, ph, mv.y, ss, (tile->mi_row_start * MI_SIZE) >> ss, bottom, filter)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static INLINE bool svt_av1_is_warp_tile_safe(const TileInfo* tile, const WarpedMotionParams* wm, int x, int y,
+                                             int width, int height, int frame_width, int frame_height) {
+    // warp_affine filters a 15x15 source envelope around each projected 8x8 centre.
+    for (int ss = 0; ss <= 1; ++ss) {
+        const int left   = (tile->mi_col_start * MI_SIZE) >> ss;
+        const int top    = (tile->mi_row_start * MI_SIZE) >> ss;
+        const int right  = AOMMIN(tile->mi_col_end * MI_SIZE, frame_width) >> ss;
+        const int bottom = AOMMIN(tile->mi_row_end * MI_SIZE, frame_height) >> ss;
+        for (int row = y >> ss; row < (y + height) >> ss; row += 8) {
+            for (int col = x >> ss; col < (x + width) >> ss; col += 8) {
+                const int64_t cx = (col + 4) << ss;
+                const int64_t cy = (row + 4) << ss;
+                const int     sx = (int)(((int64_t)wm->wmmat[2] * cx + wm->wmmat[3] * cy + wm->wmmat[0]) >>
+                                         (WARPEDMODEL_PREC_BITS + ss));
+                const int     sy = (int)(((int64_t)wm->wmmat[4] * cx + wm->wmmat[5] * cy + wm->wmmat[1]) >>
+                                         (WARPEDMODEL_PREC_BITS + ss));
+                if (sx - 7 < left || sx + 8 > right || sy - 7 < top || sy + 8 > bottom) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+static INLINE bool svt_av1_is_local_warp_tile_invariant(const TileInfo* tile, const WarpedMotionParams* wm, Mv mv,
+                                                        int x, int y, int width, int height) {
+    const int64_t unit = (int64_t)1 << WARPEDMODEL_PREC_BITS;
+    const int64_t left = tile->mi_col_start * MI_SIZE;
+    const int64_t top  = tile->mi_row_start * MI_SIZE;
+    const int64_t cx   = x - left + width / 2 - 1;
+    const int64_t cy   = y - top + height / 2 - 1;
+    const int64_t tx   = mv.x * (unit >> 3) - cx * (wm->wmmat[2] - unit) - cy * wm->wmmat[3];
+    const int64_t ty   = mv.y * (unit >> 3) - cx * wm->wmmat[4] - cy * (wm->wmmat[5] - unit);
+    // The local affine model is derived again by the decoder; its translation clamp must commute with relocation.
+    return AOMMAX(-WARPEDMODEL_TRANS_CLAMP, AOMMIN(WARPEDMODEL_TRANS_CLAMP - 1, tx)) ==
+        wm->wmmat[0] + left * (wm->wmmat[2] - unit) + top * wm->wmmat[3] &&
+        AOMMAX(-WARPEDMODEL_TRANS_CLAMP, AOMMIN(WARPEDMODEL_TRANS_CLAMP - 1, ty)) ==
+        wm->wmmat[1] + left * wm->wmmat[4] + top * (wm->wmmat[5] - unit);
 }
 
 // motion search site

@@ -361,7 +361,7 @@ static EbErrorType reset_pcs_av1(PictureParentControlSet* pcs) {
     frm_hdr->show_frame                         = 1;
     frm_hdr->showable_frame                     = 1; // frame can be used as show existing frame in future
 
-    frm_hdr->disable_cdf_update      = pcs->scs->static_config.tile_mcts;
+    frm_hdr->disable_cdf_update      = 0;
     frm_hdr->allow_high_precision_mv = 0;
     frm_hdr->force_integer_mv        = 0;
     frm_hdr->allow_warped_motion     = 0;

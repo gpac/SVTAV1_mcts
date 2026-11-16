@@ -2586,6 +2586,7 @@ static int md_subpel_search(SUBPEL_STAGE       search_stage, //ME or PME
 
     const Av1Common* const cm = pcs->ppcs->av1_cm;
     MacroBlockD*           xd = ctx->blk_ptr->av1xd;
+    const bool             tile_mcts = pcs->scs->static_config.tile_mcts && ctx->pd_pass != PD_PASS_0;
     // ref_mv is used to calculate the cost of the motion vector
     Mv ref_mv = ctx->ref_mv;
     // High level params
@@ -2595,7 +2596,7 @@ static int md_subpel_search(SUBPEL_STAGE       search_stage, //ME or PME
     ms_params->list_idx                    = list_idx;
     ms_params->ref_idx                     = ref_idx;
     ms_params->allow_hp                    = pcs->ppcs->frm_hdr.allow_high_precision_mv;
-    ms_params->forced_stop = pcs->scs->static_config.tile_mcts ? FULL_PEL : md_subpel_ctrls.max_precision;
+    ms_params->forced_stop                 = md_subpel_ctrls.max_precision;
     // Maximum number of steps in logarithmic subpel search before giving up.
     ms_params->iters_per_step = md_subpel_ctrls.subpel_iters_per_step;
     // Derive mv_limits (TODO Hsan_Subpel should be derived under ctx @ eack block)
@@ -2610,7 +2611,7 @@ static int md_subpel_search(SUBPEL_STAGE       search_stage, //ME or PME
     mv_limits.col_min  = -(((mi_col + mi_width) * MI_SIZE) + AOM_INTERP_EXTEND);
     mv_limits.row_max  = (cm->mi_rows - mi_row) * MI_SIZE + AOM_INTERP_EXTEND;
     mv_limits.col_max  = (cm->mi_cols - mi_col) * MI_SIZE + AOM_INTERP_EXTEND;
-    if (pcs->scs->static_config.tile_mcts) {
+    if (tile_mcts) {
         svt_av1_constrain_mv_limits_to_tile(&mv_limits,
                                             &xd->tile,
                                             mi_row,
@@ -2635,6 +2636,11 @@ static int md_subpel_search(SUBPEL_STAGE       search_stage, //ME or PME
     ms_params->var_params.subpel_search_type = md_subpel_ctrls.subpel_search_type;
     ms_params->var_params.w                  = block_size_wide[ctx->blk_geom->bsize];
     ms_params->var_params.h                  = block_size_high[ctx->blk_geom->bsize];
+    ms_params->var_params.tile               = tile_mcts ? &xd->tile : NULL;
+    ms_params->var_params.mi_row             = mi_row;
+    ms_params->var_params.mi_col             = mi_col;
+    ms_params->var_params.frame_width        = pcs->scs->static_config.source_width;
+    ms_params->var_params.frame_height       = pcs->scs->static_config.source_height;
 
     // Ref and src buffers
     MSBuffers* ms_buffers = &ms_params->var_params.ms_buffers;
@@ -7034,6 +7040,9 @@ static INLINE void opt_non_translation_motion_mode(PictureControlSet* pcs, ModeD
                                              0,
                                              1);
 
+            motion_mode_valid = svt_aom_is_inter_candidate_tile_safe(pcs, ctx, cand);
+        }
+        if (motion_mode_valid && (default_mv.as_int != cand->block_mi.mv[0].as_int)) {
             update_refined_mv_fast_rate(ctx, cand_bf, cand, default_mv, default_ref_mv);
             cand_bf->valid_luma_pred = 0;
         } else {
@@ -7058,6 +7067,7 @@ static INLINE void opt_non_translation_motion_mode(PictureControlSet* pcs, ModeD
 
 #if CONFIG_ENABLE_OBMC
         uint8_t motion_mode_valid = svt_aom_obmc_motion_refinement(pcs, ctx, cand, ctx->obmc_ctrls.refine_level);
+        motion_mode_valid         = motion_mode_valid && svt_aom_is_inter_candidate_tile_safe(pcs, ctx, cand);
         if (motion_mode_valid) {
             if (default_mv.as_int != cand->block_mi.mv[0].as_int) {
                 update_refined_mv_fast_rate(ctx, cand_bf, cand, default_mv, default_ref_mv);

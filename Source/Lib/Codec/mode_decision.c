@@ -260,6 +260,11 @@ MotionMode svt_aom_obmc_motion_mode_allowed(
         if (!has_overlappable_candidates(ctx->blk_ptr)) { // check_num_overlappable_neighbors
             return SIMPLE_TRANSLATION;
         }
+#if CONFIG_ENABLE_OBMC
+        if (pcs->scs->static_config.tile_mcts && !svt_aom_is_obmc_tile_safe(pcs, ctx->blk_ptr->av1xd)) {
+            return SIMPLE_TRANSLATION;
+        }
+#endif
 
         return OBMC_CAUSAL;
     } else {
@@ -3644,46 +3649,77 @@ static uint32_t reject_candidate_sframe(PictureControlSet* pcs, ModeDecisionCont
     return cand_total_cnt;
 }
 
+bool svt_aom_is_inter_candidate_tile_safe(const PictureControlSet* pcs, const ModeDecisionContext* ctx,
+                                          const ModeDecisionCandidate* cand) {
+    if (!pcs->scs->static_config.tile_mcts || !is_inter_block(&cand->block_mi) || cand->block_mi.use_intrabc) {
+        return true;
+    }
+    MacroBlockD* xd           = ctx->blk_ptr->av1xd;
+    const int    x            = xd->mi_col * MI_SIZE;
+    const int    y            = xd->mi_row * MI_SIZE;
+    const int    width        = ctx->blk_geom->bwidth;
+    const int    height       = ctx->blk_geom->bheight;
+    const int    frame_width  = pcs->scs->static_config.source_width;
+    const int    frame_height = pcs->scs->static_config.source_height;
+    for (int ref = 0; ref < 1 + has_second_ref(&cand->block_mi); ++ref) {
+        const PredictionMode mode = has_second_ref(&cand->block_mi)
+            ? (ref ? compound_ref1_mode(cand->block_mi.mode) : compound_ref0_mode(cand->block_mi.mode))
+            : cand->block_mi.mode;
+        if (mode == NEWMV && !svt_av1_is_mv_predictor_tile_safe(xd, cand->pred_mv[ref])) {
+            return false;
+        }
+        const WarpedMotionParams* wm     = ref ? &cand->wm_params_l1 : &cand->wm_params_l0;
+        const bool                global = cand->block_mi.mode == GLOBALMV || cand->block_mi.mode == GLOBAL_GLOBALMV;
+        const bool                warped = cand->block_mi.motion_mode == WARPED_CAUSAL ||
+            (global && is_global_mv_block(cand->block_mi.mode, ctx->blk_geom->bsize, wm->wmtype));
+        if (cand->block_mi.motion_mode == WARPED_CAUSAL &&
+            !svt_av1_is_local_warp_tile_invariant(&xd->tile, wm, cand->block_mi.mv[ref], x, y, width, height)) {
+            return false;
+        }
+        if (warped ? !svt_av1_is_warp_tile_safe(&xd->tile, wm, x, y, width, height, frame_width, frame_height)
+                   : !svt_av1_is_mv_tile_safe(&xd->tile,
+                                              cand->block_mi.mv[ref],
+                                              x,
+                                              y,
+                                              width,
+                                              height,
+                                              frame_width,
+                                              frame_height,
+                                              pcs->ppcs->frm_hdr.interpolation_filter)) {
+            return false;
+        }
+    }
+#if CONFIG_ENABLE_OBMC
+    if (cand->block_mi.motion_mode == OBMC_CAUSAL && !svt_aom_is_obmc_tile_safe(pcs, xd)) {
+        return false;
+    }
+#endif
+    return true;
+}
+
 static uint32_t reject_candidate_tile_mcts(PictureControlSet* pcs, ModeDecisionContext* ctx, uint32_t count) {
     if (!pcs->scs->static_config.tile_mcts) {
         return count;
     }
-    const MacroBlockD* xd     = ctx->blk_ptr->av1xd;
-    MvLimits           limits = {INT_MIN, INT_MAX, INT_MIN, INT_MAX};
-    // Include the shared 8x8 chroma footprint of sub-8x8 luma blocks.
-    const int mi_col = ctx->blk_geom->bwidth < 8 ? xd->mi_col & ~1 : xd->mi_col;
-    const int mi_row = ctx->blk_geom->bheight < 8 ? xd->mi_row & ~1 : xd->mi_row;
-    svt_av1_constrain_mv_limits_to_tile(&limits,
-                                        &xd->tile,
-                                        mi_row,
-                                        mi_col,
-                                        AOMMAX(8, ctx->blk_geom->bwidth),
-                                        AOMMAX(8, ctx->blk_geom->bheight),
-                                        pcs->scs->static_config.source_width,
-                                        pcs->scs->static_config.source_height);
     uint32_t kept = 0;
     for (uint32_t i = 0; i < count; ++i) {
-        const ModeDecisionCandidate* cand  = &ctx->fast_cand_array[i];
-        bool                         valid = true;
-        if (is_inter_block(&cand->block_mi)) {
-            for (int ref = 0; ref < 1 + has_second_ref(&cand->block_mi); ++ref) {
-                const Mv mv = cand->block_mi.mv[ref];
-                // Even luma displacements keep chroma full-pel too.
-                if ((mv.x & 15) || (mv.y & 15) || mv_check_bounds(&limits, mv)) {
-                    valid = false;
-                    break;
-                }
-            }
-        }
-        if (valid) {
-            ctx->fast_cand_array[kept++] = *cand;
+        if (svt_aom_is_inter_candidate_tile_safe(pcs, ctx, &ctx->fast_cand_array[i])) {
+            ctx->fast_cand_array[kept++] = ctx->fast_cand_array[i];
         }
     }
     if (kept == 0) {
-        if (pcs->slice_type == I_SLICE) {
+        if (pcs->slice_type != I_SLICE) {
+            if (pcs->ppcs->sframe_ref_pruned) {
+                inject_sframe_backup_candidate(pcs, ctx, &kept);
+            } else {
+                inject_zz_backup_candidate(pcs, ctx, &kept);
+            }
+            if (kept && !svt_aom_is_inter_candidate_tile_safe(pcs, ctx, &ctx->fast_cand_array[0])) {
+                kept = 0;
+            }
+        }
+        if (kept == 0) {
             inject_intra_candidates_pd0(pcs, ctx, &kept);
-        } else {
-            inject_zz_backup_candidate(pcs, ctx, &kept);
         }
     }
     assert(kept > 0);
@@ -3714,7 +3750,6 @@ EbErrorType generate_md_stage_0_cand_pd0(ModeDecisionContext* ctx, uint32_t* can
         cand_total_cnt = reject_candidate_sframe(pcs, ctx, cand_total_cnt);
     }
 
-    cand_total_cnt = reject_candidate_tile_mcts(pcs, ctx, cand_total_cnt);
     *candidate_total_count_ptr = cand_total_cnt;
 
     return EB_ErrorNone;
